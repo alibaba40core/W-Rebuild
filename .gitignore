@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+*.manifest
+*.spec.bak
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# PyInstaller
+*.spec.bak
+dist/
+build/
+release/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+
+# Backup files (test backups)
+backup_*/
+test_backup/
+
+# Temporary files
+*.tmp
+*.bak
+*.old
