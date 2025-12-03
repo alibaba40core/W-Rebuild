@@ -609,6 +609,84 @@ if (Test-Path $zoomPath) {
     } catch {}
 }
 
+# Check Browsers
+# Google Chrome
+$chromePaths = @(
+    "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
+    "$env:ProgramFiles(x86)\Google\Chrome\Application\chrome.exe",
+    "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe"
+)
+foreach ($path in $chromePaths) {
+    if (Test-Path $path) {
+        try {
+            $version = (Get-Item $path).VersionInfo.FileVersion
+            Add-DetectedTool -Name "Google Chrome" -Version $version -Path $path -Type "Browser"
+            break
+        } catch {}
+    }
+}
+
+# Microsoft Edge
+$edgePaths = @(
+    "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
+    "$env:ProgramFiles(x86)\Microsoft\Edge\Application\msedge.exe"
+)
+foreach ($path in $edgePaths) {
+    if (Test-Path $path) {
+        try {
+            $version = (Get-Item $path).VersionInfo.FileVersion
+            Add-DetectedTool -Name "Microsoft Edge" -Version $version -Path $path -Type "Browser"
+            break
+        } catch {}
+    }
+}
+
+# Mozilla Firefox
+$firefoxPaths = @(
+    "$env:ProgramFiles\Mozilla Firefox\firefox.exe",
+    "$env:ProgramFiles(x86)\Mozilla Firefox\firefox.exe"
+)
+foreach ($path in $firefoxPaths) {
+    if (Test-Path $path) {
+        try {
+            $version = (Get-Item $path).VersionInfo.FileVersion
+            Add-DetectedTool -Name "Mozilla Firefox" -Version $version -Path $path -Type "Browser"
+            break
+        } catch {}
+    }
+}
+
+# Brave Browser
+$bravePaths = @(
+    "$env:ProgramFiles\BraveSoftware\Brave-Browser\Application\brave.exe",
+    "$env:ProgramFiles(x86)\BraveSoftware\Brave-Browser\Application\brave.exe",
+    "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\Application\brave.exe"
+)
+foreach ($path in $bravePaths) {
+    if (Test-Path $path) {
+        try {
+            $version = (Get-Item $path).VersionInfo.FileVersion
+            Add-DetectedTool -Name "Brave Browser" -Version $version -Path $path -Type "Browser"
+            break
+        } catch {}
+    }
+}
+
+# Opera Browser
+$operaPaths = @(
+    "$env:LOCALAPPDATA\Programs\Opera\opera.exe",
+    "$env:ProgramFiles\Opera\opera.exe"
+)
+foreach ($path in $operaPaths) {
+    if (Test-Path $path) {
+        try {
+            $version = (Get-Item $path).VersionInfo.FileVersion
+            Add-DetectedTool -Name "Opera" -Version $version -Path $path -Type "Browser"
+            break
+        } catch {}
+    }
+}
+
 # Generic Registry Scanner for Development Tools
 # This catches tools we might have missed
 $devToolKeywords = @(
