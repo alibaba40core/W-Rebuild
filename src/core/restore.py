@@ -33,9 +33,78 @@ class RestoreManager:
         # Fall back to Documents if OneDrive not available
         return os.path.expandvars(r"%USERPROFILE%\Documents")
     
+    def _extract_zip_backup(self, zip_path: str) -> Optional[str]:
+        """
+        Extract a zip backup to temporary directory
+        
+        Args:
+            zip_path: Path to the zip file
+            
+        Returns:
+            Path to extracted directory or None if failed
+        """
+        import tempfile
+        import zipfile
+        
+        try:
+            # Create temp directory for extraction
+            temp_dir = Path(tempfile.gettempdir())
+            backup_name = Path(zip_path).stem
+            extract_dir = temp_dir / f"{backup_name}_extracted"
+            
+            # Remove if exists
+            if extract_dir.exists():
+                import shutil
+                shutil.rmtree(extract_dir, ignore_errors=True)
+            
+            extract_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Extract zip
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(extract_dir)
+            
+            # Find the actual backup folder (may be nested)
+            backup_folder = extract_dir / backup_name
+            if backup_folder.exists():
+                return str(backup_folder)
+            else:
+                # Sometimes the extraction creates the folder structure directly
+                return str(extract_dir)
+                
+        except Exception as e:
+            print(f"Failed to extract zip backup: {e}")
+            return None
+    
+    def _cleanup_extracted_backup(self, extracted_path: str):
+        """
+        Clean up extracted backup directory
+        
+        Args:
+            extracted_path: Path to the extracted backup directory
+        """
+        import shutil
+        
+        try:
+            # Get the parent extraction directory
+            extract_dir = Path(extracted_path)
+            if "_extracted" in extract_dir.name:
+                target_dir = extract_dir
+            else:
+                target_dir = extract_dir.parent
+                if "_extracted" in target_dir.name:
+                    pass  # Use parent
+                else:
+                    target_dir = extract_dir  # Use current
+            
+            if target_dir.exists():
+                shutil.rmtree(target_dir, ignore_errors=True)
+                
+        except Exception as e:
+            print(f"Failed to cleanup extracted backup: {e}")
+    
     def list_available_backups(self) -> List[Dict]:
         """
-        List all available backup folders in the backup root directory
+        List all available backup folders and zip files in the backup root directory
         
         Returns:
             List of backup metadata dictionaries sorted by timestamp (newest first)
@@ -45,9 +114,41 @@ class RestoreManager:
         if not self.backup_root.exists():
             return backups
         
-        # Scan for backup folders
+        # Scan for backup zip files and folders
         for item in self.backup_root.iterdir():
-            if item.is_dir() and item.name.startswith('backup_'):
+            # Handle zip files
+            if item.is_file() and item.suffix == '.zip' and item.stem.startswith('backup_'):
+                try:
+                    # Extract to temp to read manifest
+                    extracted_path = self._extract_zip_backup(str(item))
+                    if extracted_path:
+                        manifest_path = Path(extracted_path) / "manifest.json"
+                        
+                        if manifest_path.exists():
+                            with open(manifest_path, 'r', encoding='utf-8') as f:
+                                manifest = json.load(f)
+                            
+                            backup_info = {
+                                "backup_name": item.stem,
+                                "backup_path": str(item),
+                                "is_compressed": True,
+                                "extracted_path": extracted_path,
+                                "timestamp": manifest.get("timestamp", "unknown"),
+                                "datetime": manifest.get("datetime", ""),
+                                "tools_count": len(manifest.get("tools", [])),
+                                "env_vars_count": len(manifest.get("environment_variables", [])),
+                                "manifest": manifest
+                            }
+                            
+                            backups.append(backup_info)
+                            
+                            # Don't cleanup yet - will cleanup after user closes restore tab
+                            
+                except Exception as e:
+                    print(f"Warning: Could not read zip backup {item.name}: {e}")
+            
+            # Handle uncompressed folders (legacy)
+            elif item.is_dir() and item.name.startswith('backup_'):
                 manifest_path = item / "manifest.json"
                 
                 if manifest_path.exists():
@@ -59,6 +160,7 @@ class RestoreManager:
                         backup_info = {
                             "backup_name": item.name,
                             "backup_path": str(item),
+                            "is_compressed": False,
                             "timestamp": manifest.get("timestamp", "unknown"),
                             "datetime": manifest.get("datetime", ""),
                             "tools_count": len(manifest.get("tools", [])),
@@ -86,17 +188,30 @@ class RestoreManager:
         backups = self.list_available_backups()
         return backups[0] if backups else None
     
-    def load_backup_details(self, backup_path: str) -> Optional[Dict]:
+    def load_backup_details(self, backup_path: str, is_compressed: bool = False, extracted_path: str = None) -> Optional[Dict]:
         """
         Load detailed information from a backup's manifest
         
         Args:
-            backup_path: Path to the backup folder
+            backup_path: Path to the backup folder or zip file
+            is_compressed: Whether the backup is a zip file
+            extracted_path: Path to extracted backup (if compressed)
             
         Returns:
             Dictionary with backup details or None if failed
         """
-        manifest_path = Path(backup_path) / "manifest.json"
+        # Handle compressed backups
+        if is_compressed:
+            if extracted_path and Path(extracted_path).exists():
+                manifest_path = Path(extracted_path) / "manifest.json"
+            else:
+                # Need to extract first
+                extracted_path = self._extract_zip_backup(backup_path)
+                if not extracted_path:
+                    return None
+                manifest_path = Path(extracted_path) / "manifest.json"
+        else:
+            manifest_path = Path(backup_path) / "manifest.json"
         
         if not manifest_path.exists():
             return None
@@ -180,18 +295,20 @@ class RestoreManager:
         
         return '\n'.join(summary_parts)
     
-    def compare_tools_with_system(self, backup_path: str, detected_tools: List) -> Dict:
+    def compare_tools_with_system(self, backup_path: str, detected_tools: List, is_compressed: bool = False, extracted_path: str = None) -> Dict:
         """
         Compare backup tools with currently detected tools
         
         Args:
-            backup_path: Path to the backup folder
-            detected_tools: List of DetectedTool objects from system scan
+            backup_path: Path to the backup folder or zip file
+            detected_tools: List of DetectedTool objects from system scan (including browsers)
+            is_compressed: Whether the backup is a zip file
+            extracted_path: Path to extracted backup (if compressed)
             
         Returns:
             Dictionary with missing_tools and installed_tools lists
         """
-        details = self.load_backup_details(backup_path)
+        details = self.load_backup_details(backup_path, is_compressed, extracted_path)
         if not details or not details['tools']:
             return {
                 'missing_tools': [],
@@ -199,8 +316,14 @@ class RestoreManager:
                 'version_mismatch': []
             }
         
-        # Create set of detected tool names (case-insensitive)
-        detected_names = {tool.name.lower() for tool in detected_tools}
+        # Create dictionary of detected tool names to tool objects (case-insensitive)
+        detected_dict = {tool.name.lower(): tool for tool in detected_tools}
+        
+        # Debug logging
+        print(f"\n=== Comparison Debug ===")
+        print(f"Backup tools count: {len(details['tools'])}")
+        print(f"Backup tool names: {[t['name'] for t in details['tools']]}")
+        print(f"Detected tool names (lowercase): {list(detected_dict.keys())}")
         
         missing_tools = []
         installed_tools = []
@@ -210,11 +333,16 @@ class RestoreManager:
             tool_name = backup_tool['name']
             tool_version = backup_tool['version']
             
-            # Check if tool exists in detected tools
-            if tool_name.lower() in detected_names:
-                # Find the detected tool to compare versions
-                detected_tool = next((t for t in detected_tools if t.name.lower() == tool_name.lower()), None)
-                if detected_tool and detected_tool.version != tool_version:
+            # Check if tool exists in detected tools (case-insensitive)
+            detected_tool = detected_dict.get(tool_name.lower())
+            
+            print(f"\nChecking: {tool_name}")
+            print(f"  Looking for: '{tool_name.lower()}'")
+            print(f"  Found: {detected_tool.name if detected_tool else 'NOT FOUND'}")
+            
+            if detected_tool:
+                # Tool is installed, check version
+                if detected_tool.version != tool_version:
                     version_mismatch.append({
                         'name': tool_name,
                         'backup_version': tool_version,
@@ -274,6 +402,13 @@ class RestoreManager:
             'Oracle SQL Developer': 'Oracle.SQLDeveloper',
             'Oracle SQL Developer (Config Only)': 'Oracle.SQLDeveloper',  # Config-only detection
             'MobaXterm': 'Mobatek.MobaXterm',
+            # Browsers
+            'Google Chrome': 'Google.Chrome',
+            'Microsoft Edge': 'Microsoft.Edge',
+            'Mozilla Firefox': 'Mozilla.Firefox',
+            'Brave Browser': 'Brave.Brave',
+            'Opera': 'Opera.Opera',
+            'Vivaldi': 'Vivaldi.Vivaldi',
             'VLC': 'VideoLAN.VLC',
             '7-Zip': '7zip.7zip',
             'WinRAR': 'RARLab.WinRAR',
@@ -813,20 +948,29 @@ class RestoreManager:
         
         return False
     
-    def restore_tool_configs(self, backup_path: str, tool_name: str, tool_data: Dict) -> Dict:
+    def restore_tool_configs(self, backup_path: str, tool_name: str, tool_data: Dict, is_compressed: bool = False, extracted_path: str = None) -> Dict:
         """
         Restore configurations for a specific tool
         
         Args:
-            backup_path: Path to the backup folder
+            backup_path: Path to the backup folder or zip file
             tool_name: Name of the tool
             tool_data: Tool data from manifest
+            is_compressed: Whether the backup is a zip file
+            extracted_path: Path to extracted backup (if compressed)
             
         Returns:
             Dictionary with restoration results
         """
         import shutil
         import winreg
+        import subprocess
+        
+        # Use extracted path for compressed backups
+        if is_compressed and extracted_path:
+            working_backup_path = extracted_path
+        else:
+            working_backup_path = backup_path
         
         results = {
             'success': True,
@@ -837,6 +981,12 @@ class RestoreManager:
         
         try:
             backed_up_items = tool_data.get('backed_up_items', [])
+            
+            # Debug logging
+            print(f"\n=== Restore Config Debug for {tool_name} ===")
+            print(f"Working backup path: {working_backup_path}")
+            print(f"Backed up items count: {len(backed_up_items)}")
+            print(f"Tool data keys: {tool_data.keys()}")
             
             for item in backed_up_items:
                 item_type = item.get('type')
@@ -912,7 +1062,7 @@ class RestoreManager:
                         results['success'] = False
             
             # Special handling for extensions/plugins
-            extension_results = self._restore_extensions(tool_name, backup_path)
+            extension_results = self._restore_extensions(tool_name, working_backup_path)
             if extension_results:
                 results['restored_items'].extend(extension_results['installed'])
                 results['failed_items'].extend(extension_results['failed'])
@@ -1254,3 +1404,97 @@ class RestoreManager:
             "restored_env_vars": [],
             "errors": []
         }
+    
+    def install_tool_with_winget(self, tool_name: str, winget_id: str) -> Dict:
+        """
+        Install a tool using winget (simplified wrapper)
+        
+        Args:
+            tool_name: Name of the tool
+            winget_id: Winget package ID
+            
+        Returns:
+            Dictionary with installation results
+        """
+        return self.install_tool_via_winget(tool_name, winget_id)
+    
+    def restore_environment_variable(self, var_name: str, var_value: str) -> Dict:
+        """
+        Restore an environment variable
+        
+        Args:
+            var_name: Name of the environment variable
+            var_value: Value to set
+            
+        Returns:
+            Dictionary with restoration results
+        """
+        import subprocess
+        
+        try:
+            # Use setx command to set user environment variable permanently
+            # Note: setx has a limitation of 1024 characters
+            if len(var_value) > 1024:
+                return {
+                    'success': False,
+                    'error': f'Value too long ({len(var_value)} chars). Maximum is 1024 characters for setx.'
+                }
+            
+            # Escape quotes in the value
+            escaped_value = var_value.replace('"', '\\"')
+            
+            # Use shell=True and shorter timeout
+            # Note: setx writes success message to stdout, not stderr
+            result = subprocess.run(
+                f'setx {var_name} "{escaped_value}"',
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+            )
+            
+            # setx returns 0 on success and writes "SUCCESS: Specified value was saved." to stdout
+            if result.returncode == 0:
+                return {
+                    'success': True,
+                    'message': f'Successfully set {var_name}'
+                }
+            else:
+                # On error, setx writes to stderr
+                error_msg = result.stderr.strip() if result.stderr else result.stdout.strip()
+                return {
+                    'success': False,
+                    'error': error_msg or 'Unknown error setting environment variable'
+                }
+        
+        except subprocess.TimeoutExpired:
+            # Even if it times out, the variable might have been set
+            # Try to verify by reading it back
+            import os
+            try:
+                # Check if variable was actually set
+                test_result = subprocess.run(
+                    f'echo %{var_name}%',
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if test_result.returncode == 0 and var_value in test_result.stdout:
+                    return {
+                        'success': True,
+                        'message': f'Successfully set {var_name} (verified after timeout)'
+                    }
+            except:
+                pass
+            
+            return {
+                'success': False,
+                'error': 'Command timed out after 10 seconds. Variable may or may not have been set.'
+            }
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e)
+            }

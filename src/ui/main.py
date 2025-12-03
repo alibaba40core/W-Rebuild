@@ -77,6 +77,9 @@ class DetectionWorker(QThread):
 class MainWindow(QMainWindow):
     """Main application window for W-Rebuild"""
     
+    # Define custom signal for restore progress updates
+    restore_progress_signal = Signal(int, str, str)  # current, message, msg_type
+    
     def __init__(self):
         super().__init__()
         self.detector = SystemDetector()
@@ -85,7 +88,11 @@ class MainWindow(QMainWindow):
         self.detection_worker = None
         self.backup_worker = None
         self.detected_tools = []
+        self.detected_browsers = []
         self.available_backups = []
+        
+        # Connect restore progress signal
+        self.restore_progress_signal.connect(self._handle_restore_progress)
         
         # Get screen size for responsive design
         self.setup_screen_dimensions()
@@ -251,9 +258,10 @@ class MainWindow(QMainWindow):
             }
         """)
         
-        # Create tabs in order: User Profile, Detected Tools, Environment Variables, Restore
+        # Create tabs in order: User Profile, Detected Tools, Browsers, Environment Variables, Restore
         self.create_environment_tab()
         self.create_tools_tab()
+        self.create_browsers_tab()
         self.create_env_variables_tab()
         self.create_restore_tab()
         
@@ -298,6 +306,23 @@ class MainWindow(QMainWindow):
         separator1 = QLabel("|")
         separator1.setStyleSheet("color: #CCCCCC; font-size: 18px;")
         backup_layout.addWidget(separator1)
+        
+        # Browsers info (compact)
+        self.browsers_info_label = QLabel("🌐 <b>0</b> Browsers")
+        self.browsers_info_label.setStyleSheet(f"font-size: {self.font_size_normal}px; color: #333333;")
+        self.browsers_info_label.setMinimumWidth(130)
+        backup_layout.addWidget(self.browsers_info_label)
+        
+        # Browsers list (scrollable)
+        self.browsers_list_label = QLabel("None selected")
+        self.browsers_list_label.setStyleSheet(f"font-size: {self.font_size_small}px; color: #666666; padding: 2px 8px;")
+        self.browsers_list_label.setWordWrap(False)
+        backup_layout.addWidget(self.browsers_list_label, 1)
+        
+        # Separator
+        separator2 = QLabel("|")
+        separator2.setStyleSheet("color: #CCCCCC; font-size: 18px;")
+        backup_layout.addWidget(separator2)
         
         # Environment variables info (compact)
         self.env_info_label = QLabel("🌍 <b>0</b> Variables")
@@ -420,6 +445,122 @@ class MainWindow(QMainWindow):
         tools_layout.addLayout(actions_layout)
         
         self.tab_widget.addTab(tools_widget, "🔧 Detected Tools")
+    
+    def create_browsers_tab(self):
+        """Create the browsers tab for browser backup/restore"""
+        browsers_widget = QWidget()
+        browsers_layout = QVBoxLayout(browsers_widget)
+        browsers_layout.setContentsMargins(10, 10, 10, 10)
+        
+        # Browsers table
+        self.browsers_table = QTableWidget()
+        self.browsers_table.setColumnCount(5)
+        self.browsers_table.setHorizontalHeaderLabels(["Select", "Browser", "Version", "Path", "Config Status"])
+        
+        # Set column widths
+        self.browsers_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        self.browsers_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        self.browsers_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        self.browsers_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self.browsers_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        
+        # Responsive column widths
+        if self.screen_width >= 1920:
+            checkbox_width, name_width, version_width, status_width = 60, 180, 120, 150
+        elif self.screen_width >= 1366:
+            checkbox_width, name_width, version_width, status_width = 55, 160, 110, 140
+        else:
+            checkbox_width, name_width, version_width, status_width = 50, 140, 100, 130
+        
+        self.browsers_table.setColumnWidth(0, checkbox_width)
+        self.browsers_table.setColumnWidth(1, name_width)
+        self.browsers_table.setColumnWidth(2, version_width)
+        self.browsers_table.setColumnWidth(4, status_width)
+        
+        self.browsers_table.verticalHeader().setDefaultSectionSize(self.table_row_height)
+        self.browsers_table.setAlternatingRowColors(True)
+        self.browsers_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.browsers_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.browsers_table.verticalHeader().setVisible(False)
+        self.browsers_table.setStyleSheet(f"""
+            QTableWidget {{
+                border: 2px solid #E0E0E0;
+                border-radius: 6px;
+                background-color: white;
+                gridline-color: #F0F0F0;
+                font-size: {self.font_size_small}px;
+            }}
+            QTableWidget::item {{
+                padding: 8px;
+            }}
+            QTableWidget::item:selected {{
+                background-color: #E3F2FD;
+                color: #000000;
+            }}
+            QHeaderView::section {{
+                background-color: #F8F9FA;
+                padding: 10px;
+                border: none;
+                border-bottom: 3px solid #0078D4;
+                font-weight: bold;
+                font-size: {self.font_size_normal}px;
+            }}
+        """)
+        self.browsers_table.itemChanged.connect(self.on_browser_checkbox_changed)
+        browsers_layout.addWidget(self.browsers_table)
+        
+        # Action buttons at bottom
+        browsers_actions_layout = QHBoxLayout()
+        browsers_actions_layout.setSpacing(10)
+        
+        # Select All button
+        self.select_all_browsers_btn = QPushButton("✓ Select All")
+        self.select_all_browsers_btn.setMinimumHeight(self.button_height - 8)
+        self.select_all_browsers_btn.clicked.connect(self.select_all_browsers)
+        self.select_all_browsers_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: #E8E8E8;
+                color: #333333;
+                border: 1px solid #CCCCCC;
+                border-radius: 4px;
+                padding: 6px 16px;
+                font-size: {self.font_size_normal}px;
+            }}
+            QPushButton:hover {{
+                background-color: #D8D8D8;
+            }}
+        """)
+        browsers_actions_layout.addWidget(self.select_all_browsers_btn)
+        
+        # Deselect All button
+        self.deselect_all_browsers_btn = QPushButton("✗ Deselect All")
+        self.deselect_all_browsers_btn.setMinimumHeight(self.button_height - 8)
+        self.deselect_all_browsers_btn.clicked.connect(self.deselect_all_browsers)
+        self.deselect_all_browsers_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: #E8E8E8;
+                color: #333333;
+                border: 1px solid #CCCCCC;
+                border-radius: 4px;
+                padding: 6px 16px;
+                font-size: {self.font_size_normal}px;
+            }}
+            QPushButton:hover {{
+                background-color: #D8D8D8;
+            }}
+        """)
+        browsers_actions_layout.addWidget(self.deselect_all_browsers_btn)
+        
+        browsers_actions_layout.addStretch()
+        
+        # Selected count label
+        self.selected_browsers_count_label = QLabel("Selected: 0")
+        self.selected_browsers_count_label.setStyleSheet(f"color: #666666; font-size: {self.font_size_normal}px; padding: 5px;")
+        browsers_actions_layout.addWidget(self.selected_browsers_count_label)
+        
+        browsers_layout.addLayout(browsers_actions_layout)
+        
+        self.tab_widget.addTab(browsers_widget, "🌐 Browsers")
     
     def create_environment_tab(self):
         """Create the user profile tab"""
@@ -635,6 +776,9 @@ class MainWindow(QMainWindow):
         restore_layout.setContentsMargins(15, 15, 15, 15)
         restore_layout.setSpacing(15)
         
+        # Store reference for cleanup
+        self.restore_tab_widget = restore_widget
+        
         # Header with actions
         restore_header = QHBoxLayout()
         restore_title = QLabel("💾 Restore from Backup")
@@ -827,6 +971,13 @@ class MainWindow(QMainWindow):
         restore_layout.addLayout(restore_actions)
         
         self.tab_widget.addTab(restore_widget, "♻️ Restore")
+        
+        # Setup tab change handler for cleanup
+        def on_tab_changed(index):
+            if self.tab_widget.widget(index) != restore_widget:
+                self._cleanup_all_extracted_backups()
+        
+        self.tab_widget.currentChanged.connect(on_tab_changed)
     
     def style_table(self, table):
         """Apply consistent styling to tables with responsive font sizes"""
@@ -1024,16 +1175,23 @@ class MainWindow(QMainWindow):
     
     def on_detection_complete(self, tools: list):
         """Handle detection completion"""
-        self.detected_tools = tools
-        self.populate_results_table(tools)
+        # Separate browsers from other tools
+        browsers = [t for t in tools if t.tool_type == "Browser"]
+        other_tools = [t for t in tools if t.tool_type != "Browser"]
+        
+        self.detected_tools = other_tools
+        self.detected_browsers = browsers
+        
+        self.populate_results_table(other_tools)
+        self.populate_browsers_table(browsers)
         
         # Update UI
         self.scan_button.setEnabled(True)
         self.progress_bar.setVisible(False)
-        self.status_bar.showMessage(f"Detection complete - Found {len(tools)} tool(s)")
+        self.status_bar.showMessage(f"Detection complete - Found {len(other_tools)} tool(s) and {len(browsers)} browser(s)")
         
         if len(tools) > 0:
-            self.info_label.setText(f"✓ Found {len(tools)} tool(s)")
+            self.info_label.setText(f"✓ Found {len(other_tools)} tool(s) and {len(browsers)} browser(s)")
         else:
             self.info_label.setText("⚠ No tools detected")
         
@@ -1153,6 +1311,81 @@ class MainWindow(QMainWindow):
         if item and item.column() == 0:  # Only for checkbox column
             self.update_selected_env_count()
     
+    def populate_browsers_table(self, browsers: list):
+        """Populate the browsers table with detected browsers"""
+        # Temporarily disconnect signal to avoid triggering during population
+        self.browsers_table.itemChanged.disconnect(self.on_browser_checkbox_changed)
+        
+        self.browsers_table.setSortingEnabled(False)
+        self.browsers_table.setRowCount(len(browsers))
+        
+        for row, browser in enumerate(browsers):
+            # Checkbox for selection
+            checkbox_item = QTableWidgetItem()
+            checkbox_item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            checkbox_item.setCheckState(Qt.CheckState.Checked)  # Default to checked
+            checkbox_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.browsers_table.setItem(row, 0, checkbox_item)
+            
+            # Browser name
+            name_item = QTableWidgetItem(browser.name)
+            name_item.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+            self.browsers_table.setItem(row, 1, name_item)
+            
+            # Version
+            version_item = QTableWidgetItem(browser.version)
+            self.browsers_table.setItem(row, 2, version_item)
+            
+            # Path
+            path_item = QTableWidgetItem(browser.path)
+            path_item.setForeground(Qt.GlobalColor.darkGray)
+            self.browsers_table.setItem(row, 3, path_item)
+            
+            # Config Status
+            status_item = QTableWidgetItem("✓ Ready")
+            status_item.setForeground(Qt.GlobalColor.darkGreen)
+            status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.browsers_table.setItem(row, 4, status_item)
+        
+        self.browsers_table.setSortingEnabled(True)
+        
+        # Reconnect signal after population
+        self.browsers_table.itemChanged.connect(self.on_browser_checkbox_changed)
+        
+        # Now update counts
+        self.update_browsers_count()
+    
+    def select_all_browsers(self):
+        """Select all browsers in the table"""
+        for row in range(self.browsers_table.rowCount()):
+            item = self.browsers_table.item(row, 0)
+            if item:
+                item.setCheckState(Qt.CheckState.Checked)
+        self.update_browsers_count()
+    
+    def deselect_all_browsers(self):
+        """Deselect all browsers in the table"""
+        for row in range(self.browsers_table.rowCount()):
+            item = self.browsers_table.item(row, 0)
+            if item:
+                item.setCheckState(Qt.CheckState.Unchecked)
+        self.update_browsers_count()
+    
+    def update_browsers_count(self):
+        """Update the selected count label for browsers"""
+        count = 0
+        for row in range(self.browsers_table.rowCount()):
+            item = self.browsers_table.item(row, 0)
+            if item and item.checkState() == Qt.CheckState.Checked:
+                count += 1
+        self.selected_browsers_count_label.setText(f"Selected: {count}")
+        self.update_backup_summary()
+    
+    def on_browser_checkbox_changed(self, item):
+        """Handle browser checkbox state change"""
+        if item and item.column() == 0:  # Only for checkbox column
+            self.update_browsers_count()
+    
     def update_backup_summary(self):
         """Update the unified backup summary section"""
         # Get selected tools
@@ -1160,17 +1393,27 @@ class MainWindow(QMainWindow):
         for row in range(self.results_table.rowCount()):
             checkbox = self.results_table.item(row, 0)
             if checkbox and checkbox.checkState() == Qt.CheckState.Checked:
-                tool_name = self.results_table.item(row, 1).text()
-                tool_version = self.results_table.item(row, 2).text()
-                selected_tools.append(f"{tool_name}")
+                tool_name_item = self.results_table.item(row, 1)
+                if tool_name_item:
+                    selected_tools.append(tool_name_item.text())
+        
+        # Get selected browsers
+        selected_browsers = []
+        for row in range(self.browsers_table.rowCount()):
+            checkbox = self.browsers_table.item(row, 0)
+            if checkbox and checkbox.checkState() == Qt.CheckState.Checked:
+                browser_name_item = self.browsers_table.item(row, 1)
+                if browser_name_item:
+                    selected_browsers.append(browser_name_item.text())
         
         # Get selected environment variables
         selected_vars = []
         for row in range(self.env_table.rowCount()):
             checkbox = self.env_table.item(row, 0)
             if checkbox and checkbox.checkState() == Qt.CheckState.Checked:
-                var_name = self.env_table.item(row, 1).text()
-                selected_vars.append(var_name)
+                var_name_item = self.env_table.item(row, 1)
+                if var_name_item:
+                    selected_vars.append(var_name_item.text())
         
         # Update tools info (compact)
         tools_count = len(selected_tools)
@@ -1184,6 +1427,19 @@ class MainWindow(QMainWindow):
         else:
             self.tools_list_label.setText("None selected")
             self.tools_list_label.setStyleSheet("font-size: 10px; color: #666666;")
+        
+        # Update browsers info (compact)
+        browsers_count = len(selected_browsers)
+        self.browsers_info_label.setText(f"🌐 <b>{browsers_count}</b> Browsers")
+        if browsers_count > 0:
+            browsers_display = ", ".join(selected_browsers[:3])
+            if browsers_count > 3:
+                browsers_display += f" +{browsers_count - 3} more"
+            self.browsers_list_label.setText(browsers_display)
+            self.browsers_list_label.setStyleSheet("font-size: 10px; color: #0078D4; font-weight: bold;")
+        else:
+            self.browsers_list_label.setText("None selected")
+            self.browsers_list_label.setStyleSheet("font-size: 10px; color: #666666;")
         
         # Update environment variables info (compact)
         env_count = len(selected_vars)
@@ -1199,11 +1455,11 @@ class MainWindow(QMainWindow):
             self.env_list_label.setStyleSheet("font-size: 10px; color: #666666;")
         
         # Enable/disable backup button
-        total_selected = tools_count + env_count
+        total_selected = tools_count + browsers_count + env_count
         self.unified_backup_btn.setEnabled(total_selected > 0)
     
     def backup_selected_items(self):
-        """Backup selected tools and environment variables together"""
+        """Backup selected tools, browsers, and environment variables together"""
         if self.backup_worker and self.backup_worker.isRunning():
             return  # Backup already in progress
         
@@ -1221,6 +1477,23 @@ class MainWindow(QMainWindow):
                     'path': tool_path
                 })
         
+        # Get selected browsers
+        selected_browsers = []
+        for row in range(self.browsers_table.rowCount()):
+            checkbox = self.browsers_table.item(row, 0)
+            if checkbox and checkbox.checkState() == Qt.CheckState.Checked:
+                browser_name = self.browsers_table.item(row, 1).text()
+                browser_version = self.browsers_table.item(row, 2).text()
+                browser_path = self.browsers_table.item(row, 3).text()
+                selected_browsers.append({
+                    'name': browser_name,
+                    'version': browser_version,
+                    'path': browser_path
+                })
+        
+        # Combine tools and browsers for backup
+        all_tools = selected_tools + selected_browsers
+        
         # Get selected environment variables
         selected_vars = []
         for row in range(self.env_table.rowCount()):
@@ -1233,7 +1506,7 @@ class MainWindow(QMainWindow):
                     'value': var_value
                 })
         
-        if not selected_tools and not selected_vars:
+        if not all_tools and not selected_vars:
             QMessageBox.warning(
                 self,
                 "No Selection",
@@ -1281,7 +1554,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("W-Rebuild - Backup in Progress...")
         
         # Start backup in background thread
-        self.backup_worker = BackupWorker(self.backup_manager, selected_tools, selected_vars)
+        self.backup_worker = BackupWorker(self.backup_manager, all_tools, selected_vars)
         self.backup_worker.finished.connect(self.on_backup_complete)
         self.backup_worker.error.connect(self.on_backup_error)
         self.backup_worker.progress.connect(self.on_backup_progress)
@@ -1406,6 +1679,9 @@ class MainWindow(QMainWindow):
         """Scan for available backups in the backup folder"""
         self.status_bar.showMessage("Scanning for backups...")
         
+        # Cleanup any previously extracted backups
+        self._cleanup_all_extracted_backups()
+        
         try:
             # Get list of available backups
             self.available_backups = self.restore_manager.list_available_backups()
@@ -1492,11 +1768,21 @@ class MainWindow(QMainWindow):
         else:
             self.restore_btn.setEnabled(False)
     
+    def _cleanup_all_extracted_backups(self):
+        """Cleanup all previously extracted backups"""
+        if hasattr(self, 'available_backups') and self.available_backups:
+            for backup in self.available_backups:
+                if backup.get('is_compressed') and backup.get('extracted_path'):
+                    self.restore_manager._cleanup_extracted_backup(backup['extracted_path'])
+    
     def show_backup_details(self, backup):
         """Display detailed information about a selected backup in HTML format"""
         try:
             backup_path = backup['backup_path']
-            details = self.restore_manager.load_backup_details(backup_path)
+            is_compressed = backup.get('is_compressed', False)
+            extracted_path = backup.get('extracted_path', None)
+            
+            details = self.restore_manager.load_backup_details(backup_path, is_compressed, extracted_path)
             
             # Enhanced responsive sizing variables with better scaling
             if self.screen_width >= 2560:  # 4K monitors
@@ -1618,15 +1904,48 @@ class MainWindow(QMainWindow):
             )
             return
         
+        # Check if detection has been run
+        if not hasattr(self, 'detected_tools') or self.detected_tools is None:
+            QMessageBox.warning(
+                self,
+                "Detection Required",
+                "Please run tool detection first from the Detection tab before attempting to restore."
+            )
+            return
+        
+        # Check if browser detection exists
+        if not hasattr(self, 'detected_browsers'):
+            self.detected_browsers = []
+            QMessageBox.information(
+                self,
+                "Browser Detection Missing",
+                "Browser detection data not found. Please re-run detection from the Detection tab to ensure browsers are properly detected."
+            )
+            return
+        
         row = selected_rows[0].row()
         if row < 0 or row >= len(self.available_backups):
             return
         
         backup = self.available_backups[row]
         backup_path = backup['backup_path']
+        is_compressed = backup.get('is_compressed', False)
+        extracted_path = backup.get('extracted_path', None)
+        
+        # Combine detected tools and browsers for proper comparison
+        all_detected_tools = self.detected_tools + (self.detected_browsers if hasattr(self, 'detected_browsers') and self.detected_browsers else [])
+        
+        # Debug logging
+        print(f"\n=== Restore Comparison Debug ===")
+        print(f"Detected tools count: {len(self.detected_tools)}")
+        print(f"Detected browsers count: {len(self.detected_browsers) if hasattr(self, 'detected_browsers') else 0}")
+        print(f"Total detected count: {len(all_detected_tools)}")
+        print(f"Detected tool names: {[t.name for t in all_detected_tools]}")
         
         # Compare backup tools with currently detected tools
-        comparison = self.restore_manager.compare_tools_with_system(backup_path, self.detected_tools)
+        comparison = self.restore_manager.compare_tools_with_system(
+            backup_path, all_detected_tools, is_compressed, extracted_path
+        )
         
         missing_tools = comparison['missing_tools']
         installed_tools = comparison['installed_tools']
@@ -1636,14 +1955,27 @@ class MainWindow(QMainWindow):
         self.show_installation_dialog(backup, backup_path, missing_tools, installed_tools, version_mismatch)
     
     def show_installation_dialog(self, backup, backup_path, missing_tools, installed_tools, version_mismatch):
-        """Show dialog for selecting tools to install"""
-        from PySide6.QtWidgets import QDialog, QDialogButtonBox
+        """Show dialog for selecting tools to install and configurations to restore"""
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox, QTabWidget
+        
+        # Load backup details to get environment variables
+        is_compressed = backup.get('is_compressed', False)
+        extracted_path = backup.get('extracted_path', None)
+        backup_details = self.restore_manager.load_backup_details(backup_path, is_compressed, extracted_path)
+        env_vars = backup_details.get('environment_variables', []) if backup_details else []
         
         # Create dialog
         dialog = QDialog(self)
-        dialog.setWindowTitle("Restore Backup - Install Missing Tools")
-        dialog.setMinimumWidth(700)
-        dialog.setMinimumHeight(500)
+        dialog.setWindowTitle("Restore Backup - Configuration Restore")
+        dialog.setMinimumWidth(800)
+        dialog.setMinimumHeight(600)
+        
+        # Cleanup on dialog close
+        def cleanup_on_close():
+            if backup.get('is_compressed') and backup.get('extracted_path'):
+                self.restore_manager._cleanup_extracted_backup(backup['extracted_path'])
+        
+        dialog.finished.connect(cleanup_on_close)
         
         layout = QVBoxLayout(dialog)
         layout.setSpacing(15)
@@ -1652,122 +1984,512 @@ class MainWindow(QMainWindow):
         header_label = QLabel(f"<h3>📦 Backup: {backup['backup_name']}</h3>")
         layout.addWidget(header_label)
         
+        # Separate browsers from tools for better messaging
+        installed_browsers = [t for t in installed_tools if 'chrome' in t['name'].lower() or 'edge' in t['name'].lower() or 'firefox' in t['name'].lower() or 'brave' in t['name'].lower() or 'opera' in t['name'].lower()]
+        installed_other_tools = [t for t in installed_tools if t not in installed_browsers]
+        
+        missing_browsers = [t for t in missing_tools if 'chrome' in t['name'].lower() or 'edge' in t['name'].lower() or 'firefox' in t['name'].lower() or 'brave' in t['name'].lower() or 'opera' in t['name'].lower()]
+        missing_other_tools = [t for t in missing_tools if t not in missing_browsers]
+        
         # Status summary
         status_text = f"<p><b>Status Summary:</b></p><ul>"
-        status_text += f"<li>✅ <b>{len(installed_tools)}</b> tool(s) already installed</li>"
-        status_text += f"<li>❌ <b>{len(missing_tools)}</b> tool(s) need installation</li>"
+        
+        if installed_other_tools:
+            status_text += f"<li>✅ <b>{len(installed_other_tools)}</b> tool(s) already installed (configs can be restored)</li>"
+        
+        if installed_browsers:
+            status_text += f"<li>🌐 <b>{len(installed_browsers)}</b> browser(s) already installed (configs can be restored)</li>"
+        
+        if missing_other_tools:
+            status_text += f"<li>❌ <b>{len(missing_other_tools)}</b> tool(s) need installation</li>"
+        
+        if missing_browsers:
+            status_text += f"<li>❌ <b>{len(missing_browsers)}</b> browser(s) need installation</li>"
+        
         if version_mismatch:
-            status_text += f"<li>⚠️ <b>{len(version_mismatch)}</b> tool(s) have version mismatch (will be skipped)</li>"
+            status_text += f"<li>⚠️ <b>{len(version_mismatch)}</b> tool(s) have version mismatch</li>"
+        
+        status_text += f"<li>🌍 <b>{len(env_vars)}</b> environment variable(s) available</li>"
         status_text += "</ul>"
         
         status_label = QLabel(status_text)
         layout.addWidget(status_label)
         
-        if not missing_tools:
-            info_label = QLabel("<p style='color: green;'><b>✓ All tools from backup are already installed!</b></p>"
-                               "<p>No installation needed. Click Close to finish.</p>")
-            layout.addWidget(info_label)
+        # Create tabs for different restore options
+        tabs = QTabWidget()
+        
+        # Tab 1: Missing Tools (need installation)
+        if missing_tools:
+            missing_tab = QWidget()
+            missing_layout = QVBoxLayout(missing_tab)
             
-            # Close button only
-            button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-            button_box.rejected.connect(dialog.reject)
-            layout.addWidget(button_box)
+            missing_label = QLabel("<p><b>Select tools to install:</b></p>")
+            missing_layout.addWidget(missing_label)
             
-            dialog.exec()
-            return
-        
-        # Missing tools section
-        missing_label = QLabel("<p><b>Select tools to install:</b></p>")
-        layout.addWidget(missing_label)
-        
-        # Tools table
-        tools_table = QTableWidget()
-        tools_table.setColumnCount(4)
-        tools_table.setHorizontalHeaderLabels(["Install", "Tool Name", "Version", "Install Method"])
-        tools_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        tools_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        tools_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        tools_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        tools_table.setColumnWidth(0, 60)
-        tools_table.setColumnWidth(2, 100)
-        tools_table.setColumnWidth(3, 120)
-        tools_table.setAlternatingRowColors(True)
-        tools_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        tools_table.verticalHeader().setVisible(False)
-        
-        tools_table.setRowCount(len(missing_tools))
-        
-        for row, tool in enumerate(missing_tools):
-            # Checkbox
-            check_item = QTableWidgetItem()
-            check_item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
-            check_item.setCheckState(Qt.CheckState.Checked)
-            tools_table.setItem(row, 0, check_item)
+            # Tools table
+            self.missing_tools_table = QTableWidget()
+            self.missing_tools_table.setColumnCount(4)
+            self.missing_tools_table.setHorizontalHeaderLabels(["Install", "Tool Name", "Version", "Install Method"])
+            self.missing_tools_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+            self.missing_tools_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+            self.missing_tools_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+            self.missing_tools_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+            self.missing_tools_table.setColumnWidth(0, 60)
+            self.missing_tools_table.setColumnWidth(2, 100)
+            self.missing_tools_table.setColumnWidth(3, 120)
+            self.missing_tools_table.setAlternatingRowColors(True)
+            self.missing_tools_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+            self.missing_tools_table.verticalHeader().setVisible(False)
             
-            # Tool name
-            name_item = QTableWidgetItem(tool['name'])
-            tools_table.setItem(row, 1, name_item)
+            self.missing_tools_table.setRowCount(len(missing_tools))
             
-            # Version
-            version_item = QTableWidgetItem(tool['version'])
-            tools_table.setItem(row, 2, version_item)
+            for row, tool in enumerate(missing_tools):
+                # Checkbox
+                check_item = QTableWidgetItem()
+                check_item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+                check_item.setCheckState(Qt.CheckState.Checked)
+                self.missing_tools_table.setItem(row, 0, check_item)
+                
+                # Tool name
+                name_item = QTableWidgetItem(tool['name'])
+                self.missing_tools_table.setItem(row, 1, name_item)
+                
+                # Version
+                version_item = QTableWidgetItem(tool['version'])
+                self.missing_tools_table.setItem(row, 2, version_item)
+                
+                # Install method
+                winget_id = tool.get('winget_id')
+                if winget_id:
+                    method_text = f"winget ({winget_id})"
+                else:
+                    method_text = "Manual"
+                
+                method_item = QTableWidgetItem(method_text)
+                self.missing_tools_table.setItem(row, 3, method_item)
             
-            # Install method
-            winget_id = tool.get('winget_id') or self.restore_manager.get_winget_package_id(tool['name'])
-            download_url = tool.get('download_url') or self.restore_manager.get_download_url(tool['name'], tool.get('version'))
+            self.style_table(self.missing_tools_table)
+            missing_layout.addWidget(self.missing_tools_table)
             
-            if winget_id:
-                method_text = "winget"
-            elif download_url:
-                method_text = "URL Download"
-            else:
-                method_text = "Manual"
+            # Select all/none buttons
+            button_layout = QHBoxLayout()
+            select_all_btn = QPushButton("✓ Select All")
+            select_all_btn.clicked.connect(lambda: self.toggle_all_checkboxes(self.missing_tools_table, True))
+            button_layout.addWidget(select_all_btn)
             
-            method_item = QTableWidgetItem(method_text)
-            tools_table.setItem(row, 3, method_item)
+            select_none_btn = QPushButton("✗ Deselect All")
+            select_none_btn.clicked.connect(lambda: self.toggle_all_checkboxes(self.missing_tools_table, False))
+            button_layout.addWidget(select_none_btn)
+            
+            button_layout.addStretch()
+            missing_layout.addLayout(button_layout)
+            
+            tabs.addTab(missing_tab, f"❌ Missing Tools ({len(missing_tools)})")
         
-        self.style_table(tools_table)
-        layout.addWidget(tools_table)
+        # Tab 2: Installed Tools/Browsers (restore configs only)
+        if installed_tools:
+            installed_tab = QWidget()
+            installed_layout = QVBoxLayout(installed_tab)
+            
+            installed_label = QLabel("<p><b>Select tools/browsers to restore configurations:</b></p>")
+            installed_layout.addWidget(installed_label)
+            
+            # Installed tools table
+            self.installed_tools_table = QTableWidget()
+            self.installed_tools_table.setColumnCount(4)
+            self.installed_tools_table.setHorizontalHeaderLabels(["Restore", "Tool Name", "Version", "Status"])
+            self.installed_tools_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+            self.installed_tools_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+            self.installed_tools_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+            self.installed_tools_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+            self.installed_tools_table.setColumnWidth(0, 60)
+            self.installed_tools_table.setColumnWidth(2, 100)
+            self.installed_tools_table.setColumnWidth(3, 150)
+            self.installed_tools_table.setAlternatingRowColors(True)
+            self.installed_tools_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+            self.installed_tools_table.verticalHeader().setVisible(False)
+            
+            self.installed_tools_table.setRowCount(len(installed_tools))
+            
+            for row, tool in enumerate(installed_tools):
+                # Checkbox
+                check_item = QTableWidgetItem()
+                check_item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+                check_item.setCheckState(Qt.CheckState.Checked)
+                self.installed_tools_table.setItem(row, 0, check_item)
+                
+                # Tool name
+                name_item = QTableWidgetItem(tool['name'])
+                self.installed_tools_table.setItem(row, 1, name_item)
+                
+                # Version
+                version_item = QTableWidgetItem(tool['version'])
+                self.installed_tools_table.setItem(row, 2, version_item)
+                
+                # Status
+                status_item = QTableWidgetItem("✓ Already Installed")
+                status_item.setForeground(Qt.GlobalColor.darkGreen)
+                self.installed_tools_table.setItem(row, 3, status_item)
+            
+            self.style_table(self.installed_tools_table)
+            installed_layout.addWidget(self.installed_tools_table)
+            
+            # Select all/none buttons
+            button_layout2 = QHBoxLayout()
+            select_all_btn2 = QPushButton("✓ Select All")
+            select_all_btn2.clicked.connect(lambda: self.toggle_all_checkboxes(self.installed_tools_table, True))
+            button_layout2.addWidget(select_all_btn2)
+            
+            select_none_btn2 = QPushButton("✗ Deselect All")
+            select_none_btn2.clicked.connect(lambda: self.toggle_all_checkboxes(self.installed_tools_table, False))
+            button_layout2.addWidget(select_none_btn2)
+            
+            button_layout2.addStretch()
+            installed_layout.addLayout(button_layout2)
+            
+            tabs.addTab(installed_tab, f"✅ Installed Tools ({len(installed_tools)})")
         
-        # Select all/none buttons
-        button_layout = QHBoxLayout()
-        select_all_btn = QPushButton("✓ Select All")
-        select_all_btn.clicked.connect(lambda: self.toggle_all_checkboxes(tools_table, True))
-        button_layout.addWidget(select_all_btn)
+        # Tab 3: Environment Variables
+        if env_vars:
+            env_tab = QWidget()
+            env_layout = QVBoxLayout(env_tab)
+            
+            env_label = QLabel("<p><b>Select environment variables to restore:</b></p>")
+            env_layout.addWidget(env_label)
+            
+            # Environment variables table
+            self.env_vars_table = QTableWidget()
+            self.env_vars_table.setColumnCount(3)
+            self.env_vars_table.setHorizontalHeaderLabels(["Restore", "Variable Name", "Value"])
+            self.env_vars_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+            self.env_vars_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+            self.env_vars_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+            self.env_vars_table.setColumnWidth(0, 60)
+            self.env_vars_table.setColumnWidth(1, 250)
+            self.env_vars_table.setAlternatingRowColors(True)
+            self.env_vars_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+            self.env_vars_table.verticalHeader().setVisible(False)
+            
+            self.env_vars_table.setRowCount(len(env_vars))
+            
+            for row, env_var in enumerate(env_vars):
+                # Checkbox
+                check_item = QTableWidgetItem()
+                check_item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+                check_item.setCheckState(Qt.CheckState.Checked)
+                self.env_vars_table.setItem(row, 0, check_item)
+                
+                # Variable name
+                name_item = QTableWidgetItem(env_var['name'])
+                name_item.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+                self.env_vars_table.setItem(row, 1, name_item)
+                
+                # Value
+                value_item = QTableWidgetItem(env_var['value'])
+                value_item.setToolTip(env_var['value'])
+                self.env_vars_table.setItem(row, 2, value_item)
+            
+            self.style_table(self.env_vars_table)
+            env_layout.addWidget(self.env_vars_table)
+            
+            # Select all/none buttons
+            button_layout3 = QHBoxLayout()
+            select_all_btn3 = QPushButton("✓ Select All")
+            select_all_btn3.clicked.connect(lambda: self.toggle_all_checkboxes(self.env_vars_table, True))
+            button_layout3.addWidget(select_all_btn3)
+            
+            select_none_btn3 = QPushButton("✗ Deselect All")
+            select_none_btn3.clicked.connect(lambda: self.toggle_all_checkboxes(self.env_vars_table, False))
+            button_layout3.addWidget(select_none_btn3)
+            
+            button_layout3.addStretch()
+            env_layout.addLayout(button_layout3)
+            
+            tabs.addTab(env_tab, f"🌍 Environment Variables ({len(env_vars)})")
         
-        select_none_btn = QPushButton("✗ Deselect All")
-        select_none_btn.clicked.connect(lambda: self.toggle_all_checkboxes(tools_table, False))
-        button_layout.addWidget(select_none_btn)
-        
-        button_layout.addStretch()
-        layout.addLayout(button_layout)
-        
-        # Warning about manual installs
-        manual_tools = []
-        for t in missing_tools:
-            winget_id = t.get('winget_id') or self.restore_manager.get_winget_package_id(t['name'])
-            download_url = t.get('download_url') or self.restore_manager.get_download_url(t['name'], t.get('version'))
-            if not winget_id and not download_url:
-                manual_tools.append(t)
-        
-        if manual_tools:
-            warning_label = QLabel(
-                f"<p style='color: #FF8C00;'>⚠️ <b>Note:</b> {len(manual_tools)} tool(s) marked as 'Manual' "
-                "cannot be auto-installed. Download links will be provided.</p>"
-            )
-            layout.addWidget(warning_label)
+        layout.addWidget(tabs)
         
         # Dialog buttons
         button_box = QDialogButtonBox()
-        install_btn = button_box.addButton("🚀 Install Selected Tools", QDialogButtonBox.ButtonRole.AcceptRole)
+        restore_btn = button_box.addButton("🚀 Install & Restore Selected", QDialogButtonBox.ButtonRole.AcceptRole)
         cancel_btn = button_box.addButton("Cancel", QDialogButtonBox.ButtonRole.RejectRole)
         
-        button_box.accepted.connect(lambda: self.start_installation(dialog, backup_path, tools_table, missing_tools))
+        button_box.accepted.connect(lambda: self.start_installation_and_restore(
+            dialog, backup_path, missing_tools, installed_tools, env_vars, is_compressed, extracted_path
+        ))
         button_box.rejected.connect(dialog.reject)
         
         layout.addWidget(button_box)
         
         dialog.exec()
+    
+    def start_installation_and_restore(self, dialog, backup_path, missing_tools, installed_tools, env_vars, is_compressed, extracted_path):
+        """Start installing and restoring selected items"""
+        # Get selected missing tools
+        selected_missing = []
+        if hasattr(self, 'missing_tools_table'):
+            for row in range(self.missing_tools_table.rowCount()):
+                check_item = self.missing_tools_table.item(row, 0)
+                if check_item and check_item.checkState() == Qt.CheckState.Checked:
+                    selected_missing.append(missing_tools[row])
+        
+        # Get selected installed tools (for config restore)
+        selected_installed = []
+        if hasattr(self, 'installed_tools_table'):
+            for row in range(self.installed_tools_table.rowCount()):
+                check_item = self.installed_tools_table.item(row, 0)
+                if check_item and check_item.checkState() == Qt.CheckState.Checked:
+                    selected_installed.append(installed_tools[row])
+        
+        # Get selected environment variables
+        selected_env_vars = []
+        if hasattr(self, 'env_vars_table'):
+            for row in range(self.env_vars_table.rowCount()):
+                check_item = self.env_vars_table.item(row, 0)
+                if check_item and check_item.checkState() == Qt.CheckState.Checked:
+                    selected_env_vars.append(env_vars[row])
+        
+        if not selected_missing and not selected_installed and not selected_env_vars:
+            QMessageBox.warning(dialog, "No Selection", "Please select at least one item to install or restore.")
+            return
+        
+        # Close the dialog
+        dialog.accept()
+        
+        # Show progress dialog and start installation/restore
+        self.show_restore_progress(backup_path, selected_missing, selected_installed, selected_env_vars, is_compressed, extracted_path)
+    
+    def show_restore_progress(self, backup_path, selected_missing, selected_installed, selected_env_vars, is_compressed, extracted_path):
+        """Show installation and restore progress dialog"""
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox, QTextEdit
+        
+        total_items = len(selected_missing) + len(selected_installed) + len(selected_env_vars)
+        
+        # Create progress dialog
+        progress_dialog = QDialog(self)
+        progress_dialog.setWindowTitle("Restoring Backup")
+        progress_dialog.setMinimumWidth(700)
+        progress_dialog.setMinimumHeight(450)
+        
+        layout = QVBoxLayout(progress_dialog)
+        
+        # Progress label
+        self.restore_progress_label = QLabel(f"Processing 0 of {total_items} items...")
+        layout.addWidget(self.restore_progress_label)
+        
+        # Progress bar - add 1 for the completion step
+        self.restore_progress_bar = QProgressBar()
+        self.restore_progress_bar.setMaximum(total_items + 1)
+        self.restore_progress_bar.setValue(0)
+        layout.addWidget(self.restore_progress_bar)
+        
+        # Log text area
+        self.restore_log_text = QTextEdit()
+        self.restore_log_text.setReadOnly(True)
+        self.restore_log_text.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: #1E1E1E;
+                color: #D4D4D4;
+                font-family: Consolas, monospace;
+                font-size: {self.font_size_small}px;
+                border: 1px solid #444;
+            }}
+        """)
+        layout.addWidget(self.restore_log_text)
+        
+        # Close button (disabled during restore)
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        self.restore_close_btn = button_box.button(QDialogButtonBox.StandardButton.Close)
+        self.restore_close_btn.setEnabled(False)
+        button_box.rejected.connect(progress_dialog.reject)
+        layout.addWidget(button_box)
+        
+        # Start restore in background
+        self.restore_items_background(backup_path, selected_missing, selected_installed, selected_env_vars, 
+                                      is_compressed, extracted_path, progress_dialog)
+        
+        progress_dialog.exec()
+    
+    def restore_items_background(self, backup_path, selected_missing, selected_installed, selected_env_vars, 
+                                 is_compressed, extracted_path, progress_dialog):
+        """Restore items in background thread"""
+        import threading
+        
+        self.restore_results = []
+        self.restore_current = 0
+        self.restore_total = len(selected_missing) + len(selected_installed) + len(selected_env_vars)
+        
+        def restore_worker():
+            # Show summary at the beginning
+            self.update_restore_progress("="*60, "info")
+            self.update_restore_progress("RESTORE SUMMARY", "info")
+            self.update_restore_progress("="*60, "info")
+            
+            if selected_missing:
+                self.update_restore_progress(f"\n📦 Tools to install/check: {len(selected_missing)}", "info")
+                for tool in selected_missing:
+                    self.update_restore_progress(f"  • {tool['name']} v{tool['version']}", "info")
+            
+            if selected_installed:
+                self.update_restore_progress(f"\n✅ Tools/Browsers - restore configs: {len(selected_installed)}", "info")
+                for tool in selected_installed:
+                    self.update_restore_progress(f"  • {tool['name']} v{tool['version']}", "info")
+            
+            if selected_env_vars:
+                self.update_restore_progress(f"\n🌍 Environment variables to restore: {len(selected_env_vars)}", "info")
+                for var in selected_env_vars:
+                    var_value_preview = var['value'][:50] + '...' if len(var['value']) > 50 else var['value']
+                    self.update_restore_progress(f"  • {var['name']} = {var_value_preview}", "info")
+            
+            self.update_restore_progress("\n" + "="*60, "info")
+            self.update_restore_progress("Starting restore process...\n", "info")
+            
+            # Phase 1: Install missing tools (or restore if already installed)
+            for i, tool in enumerate(selected_missing):
+                self.restore_current = i + 1
+                tool_name = tool['name']
+                
+                # First check if tool is actually already installed
+                # This happens when winget shows it as available but detection missed it
+                self.update_restore_progress(f"Checking {tool_name}...", "info")
+                
+                try:
+                    winget_id = tool.get('winget_id')
+                    
+                    # Try to check if already installed via winget list
+                    if winget_id:
+                        import subprocess
+                        check_result = subprocess.run(
+                            ['winget', 'list', '--id', winget_id],
+                            capture_output=True,
+                            text=True,
+                            timeout=10
+                        )
+                        
+                        # If winget list finds it, the tool is already installed
+                        if check_result.returncode == 0 and winget_id.lower() in check_result.stdout.lower():
+                            self.update_restore_progress(f"✓ {tool_name} is already installed, restoring configuration...", "info")
+                            
+                            # Restore configs instead of installing
+                            tool_data = tool['backup_data']
+                            result = self.restore_manager.restore_tool_configs(
+                                backup_path, tool_name, tool_data, is_compressed, extracted_path
+                            )
+                            if result.get('success'):
+                                restored_count = len(result.get('restored_items', []))
+                                self.update_restore_progress(f"✓ Restored configuration for {tool_name} ({restored_count} items)", "success")
+                            else:
+                                self.update_restore_progress(f"⚠ {tool_name} installed but config restore skipped", "warning")
+                            continue
+                    
+                    # Not installed, proceed with installation
+                    self.update_restore_progress(f"Installing {tool_name}...", "info")
+                    
+                    if winget_id:
+                        result = self.restore_manager.install_tool_with_winget(tool_name, winget_id)
+                        if result['success']:
+                            self.update_restore_progress(f"✓ Installed {tool_name}", "success")
+                            
+                            # After installation, try to restore configs
+                            tool_data = tool['backup_data']
+                            config_result = self.restore_manager.restore_tool_configs(
+                                backup_path, tool_name, tool_data, is_compressed, extracted_path
+                            )
+                            if config_result.get('success'):
+                                restored_count = len(config_result.get('restored_items', []))
+                                self.update_restore_progress(f"✓ Restored configuration for {tool_name} ({restored_count} items)", "success")
+                        else:
+                            self.update_restore_progress(f"✗ Failed to install {tool_name}: {result.get('error', 'Unknown error')}", "error")
+                    else:
+                        self.update_restore_progress(f"⚠ {tool_name} requires manual installation", "warning")
+                        
+                except Exception as e:
+                    self.update_restore_progress(f"✗ Error processing {tool_name}: {str(e)}", "error")
+                
+                # Add separator after each tool
+                self.update_restore_progress("-" * 60, "info")
+            
+            # Phase 2: Restore configs for installed tools/browsers
+            for i, tool in enumerate(selected_installed):
+                self.restore_current = len(selected_missing) + i + 1
+                self.update_restore_progress(f"Restoring configuration for {tool['name']}...", "info")
+                
+                try:
+                    tool_name = tool['name']
+                    tool_data = tool['backup_data']
+                    
+                    result = self.restore_manager.restore_tool_configs(
+                        backup_path, tool_name, tool_data, is_compressed, extracted_path
+                    )
+                    if result.get('success'):
+                        restored_count = len(result.get('restored_items', []))
+                        self.update_restore_progress(f"✓ Restored configuration for {tool_name} ({restored_count} items)", "success")
+                    else:
+                        self.update_restore_progress(f"✗ Failed to restore {tool_name}: {result.get('error', 'Unknown error')}", "error")
+                except Exception as e:
+                    self.update_restore_progress(f"✗ Error restoring {tool['name']}: {str(e)}", "error")
+                
+                # Add separator after each tool
+                self.update_restore_progress("-" * 60, "info")
+            
+            # Phase 3: Restore environment variables
+            for i, env_var in enumerate(selected_env_vars):
+                self.restore_current = len(selected_missing) + len(selected_installed) + i + 1
+                self.update_restore_progress(f"Restoring variable {env_var['name']}...", "info")
+                
+                try:
+                    result = self.restore_manager.restore_environment_variable(env_var['name'], env_var['value'])
+                    if result.get('success'):
+                        self.update_restore_progress(f"✓ Restored {env_var['name']}", "success")
+                    else:
+                        self.update_restore_progress(f"✗ Failed to restore {env_var['name']}: {result.get('error', 'Unknown error')}", "error")
+                except Exception as e:
+                    self.update_restore_progress(f"✗ Error restoring {env_var['name']}: {str(e)}", "error")
+                
+                # Add separator after each variable
+                self.update_restore_progress("-" * 60, "info")
+            
+            # Cleanup extracted backup if needed
+            if is_compressed and extracted_path:
+                self.restore_manager._cleanup_extracted_backup(extracted_path)
+            
+            # Complete - increment progress to reach 100%
+            self.restore_current = len(selected_missing) + len(selected_installed) + len(selected_env_vars) + 1
+            self.update_restore_progress("\n✓ Restore completed!", "success")
+            self.restore_close_btn.setEnabled(True)
+        
+        thread = threading.Thread(target=restore_worker, daemon=True)
+        thread.start()
+    
+    def update_restore_progress(self, message, msg_type="info"):
+        """Update restore progress UI from worker thread"""
+        # Emit signal to update UI from main thread
+        self.restore_progress_signal.emit(self.restore_current, message, msg_type)
+    
+    def _handle_restore_progress(self, current, message, msg_type):
+        """Handle restore progress updates in main thread"""
+        # Update progress bar
+        self.restore_progress_bar.setValue(current)
+        
+        # Update label - check if we're at the completion step
+        if current > self.restore_total:
+            self.restore_progress_label.setText("Finalizing...")
+        else:
+            self.restore_progress_label.setText(f"Processing {current} of {self.restore_total} items...")
+        
+        # Add message to log with color
+        color = {
+            "info": "#D4D4D4",
+            "success": "#4EC9B0",
+            "warning": "#FFA500",
+            "error": "#F48771"
+        }.get(msg_type, "#D4D4D4")
+        
+        self.restore_log_text.append(f"<span style='color: {color};'>{message}</span>")
+        
+        # Auto-scroll to bottom
+        scrollbar = self.restore_log_text.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
     
     def toggle_all_checkboxes(self, table, checked):
         """Toggle all checkboxes in the table"""
@@ -1848,6 +2570,16 @@ class MainWindow(QMainWindow):
         """Install tools in background thread"""
         from PySide6.QtCore import QTimer
         import threading
+        
+        # Get backup info for cleanup
+        current_backup = None
+        for backup in self.available_backups:
+            if backup['backup_path'] == backup_path:
+                current_backup = backup
+                break
+        
+        is_compressed = current_backup.get('is_compressed', False) if current_backup else False
+        extracted_path = current_backup.get('extracted_path', None) if current_backup else None
         
         # Store results for UI updates
         self.install_results = []
@@ -1951,7 +2683,9 @@ class MainWindow(QMainWindow):
                         import time
                         time.sleep(3)
                     
-                    restore_result = self.restore_manager.restore_tool_configs(backup_path, tool_name, tool_backup_data)
+                    restore_result = self.restore_manager.restore_tool_configs(
+                        backup_path, tool_name, tool_backup_data, is_compressed, extracted_path
+                    )
                     
                     # Show restore result
                     progress_info = {
@@ -2067,6 +2801,11 @@ class MainWindow(QMainWindow):
                 self.install_progress_label.setText(
                     f"✅ Installation complete! ({self.install_total} tools processed)"
                 )
+                
+                # Cleanup extracted backup in background
+                if is_compressed and extracted_path:
+                    self.restore_manager._cleanup_extracted_backup(extracted_path)
+                
                 self.install_close_btn.setEnabled(True)
                 self.install_log_text.append(f"\n{'='*60}")
                 self.install_log_text.append(f"Installation process finished.")

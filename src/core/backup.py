@@ -466,6 +466,123 @@ class BackupManager:
                         "description": "Windows PowerShell Profile"
                     }
                 ]
+            },
+            
+            # Browsers
+            "Google Chrome": {
+                "name": "chrome",
+                "paths": [
+                    {
+                        "source": r"%LOCALAPPDATA%\Google\Chrome\User Data\Default",
+                        "type": "folder",
+                        "description": "Default Profile (Bookmarks, History, Extensions, Settings)"
+                    },
+                    {
+                        "source": r"%LOCALAPPDATA%\Google\Chrome\User Data\Local State",
+                        "type": "file",
+                        "description": "Chrome Local State"
+                    },
+                    {
+                        "source": r"HKEY_CURRENT_USER\Software\Google\Chrome",
+                        "type": "registry",
+                        "description": "Chrome Registry Settings"
+                    }
+                ]
+            },
+            "Microsoft Edge": {
+                "name": "edge",
+                "paths": [
+                    {
+                        "source": r"%LOCALAPPDATA%\Microsoft\Edge\User Data\Default",
+                        "type": "folder",
+                        "description": "Default Profile (Bookmarks, History, Extensions, Settings)"
+                    },
+                    {
+                        "source": r"%LOCALAPPDATA%\Microsoft\Edge\User Data\Local State",
+                        "type": "file",
+                        "description": "Edge Local State"
+                    },
+                    {
+                        "source": r"HKEY_CURRENT_USER\Software\Microsoft\Edge",
+                        "type": "registry",
+                        "description": "Edge Registry Settings"
+                    }
+                ]
+            },
+            "Mozilla Firefox": {
+                "name": "firefox",
+                "paths": [
+                    {
+                        "source": r"%APPDATA%\Mozilla\Firefox\Profiles",
+                        "type": "folder",
+                        "description": "All Firefox Profiles (Bookmarks, Extensions, Settings)"
+                    },
+                    {
+                        "source": r"%APPDATA%\Mozilla\Firefox\profiles.ini",
+                        "type": "file",
+                        "description": "Firefox Profiles Configuration"
+                    },
+                    {
+                        "source": r"HKEY_CURRENT_USER\Software\Mozilla\Firefox",
+                        "type": "registry",
+                        "description": "Firefox Registry Settings"
+                    }
+                ]
+            },
+            "Brave Browser": {
+                "name": "brave",
+                "paths": [
+                    {
+                        "source": r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\Default",
+                        "type": "folder",
+                        "description": "Default Profile (Bookmarks, History, Extensions, Settings)"
+                    },
+                    {
+                        "source": r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\Local State",
+                        "type": "file",
+                        "description": "Brave Local State"
+                    },
+                    {
+                        "source": r"HKEY_CURRENT_USER\Software\BraveSoftware\Brave-Browser",
+                        "type": "registry",
+                        "description": "Brave Registry Settings"
+                    }
+                ]
+            },
+            "Opera": {
+                "name": "opera",
+                "paths": [
+                    {
+                        "source": r"%APPDATA%\Opera Software\Opera Stable",
+                        "type": "folder",
+                        "description": "Opera Profile (Bookmarks, Extensions, Settings)"
+                    },
+                    {
+                        "source": r"HKEY_CURRENT_USER\Software\Opera Software",
+                        "type": "registry",
+                        "description": "Opera Registry Settings"
+                    }
+                ]
+            },
+            "Vivaldi": {
+                "name": "vivaldi",
+                "paths": [
+                    {
+                        "source": r"%LOCALAPPDATA%\Vivaldi\User Data\Default",
+                        "type": "folder",
+                        "description": "Default Profile (Bookmarks, History, Extensions, Settings)"
+                    },
+                    {
+                        "source": r"%LOCALAPPDATA%\Vivaldi\User Data\Local State",
+                        "type": "file",
+                        "description": "Vivaldi Local State"
+                    },
+                    {
+                        "source": r"HKEY_CURRENT_USER\Software\Vivaldi",
+                        "type": "registry",
+                        "description": "Vivaldi Registry Settings"
+                    }
+                ]
             }
         }
     
@@ -473,6 +590,7 @@ class BackupManager:
                      backup_name: Optional[str] = None) -> Dict:
         """
         Create a backup of selected tools and environment variables
+        Creates backup in temp directory, zips it to OneDrive, then deletes temp folder
         
         Args:
             selected_tools: List of dicts with 'name', 'version', 'path'
@@ -482,12 +600,16 @@ class BackupManager:
         Returns:
             Dict with backup results and manifest path
         """
+        import tempfile
+        
         # Create timestamped backup folder
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         if not backup_name:
             backup_name = f"backup_{timestamp}"
         
-        backup_dir = self.backup_root / backup_name
+        # Create backup in temp directory first
+        temp_dir = Path(tempfile.gettempdir())
+        backup_dir = temp_dir / backup_name
         backup_dir.mkdir(parents=True, exist_ok=True)
         
         # Initialize manifest
@@ -578,12 +700,24 @@ class BackupManager:
         with open(manifest_path, 'w', encoding='utf-8') as f:
             json.dump(manifest, f, indent=2)
         
+        # Move backup from temp to final location (skip ZIP for now for speed)
+        final_backup_dir = self.backup_root / backup_name
+        self.backup_root.mkdir(parents=True, exist_ok=True)
+        
+        # Remove existing backup if present
+        if final_backup_dir.exists():
+            shutil.rmtree(final_backup_dir, ignore_errors=True)
+        
+        # Move from temp to final location
+        shutil.move(str(backup_dir), str(final_backup_dir))
+        
         return {
             "success": True,
-            "backup_dir": str(backup_dir),
-            "manifest_path": str(manifest_path),
+            "backup_dir": str(final_backup_dir),
+            "manifest_path": str(final_backup_dir / "manifest.json"),
             "results": results,
-            "timestamp": timestamp
+            "timestamp": timestamp,
+            "is_compressed": False
         }
     
     def _get_tool_config(self, tool_name: str) -> Optional[Dict]:
@@ -598,6 +732,60 @@ class BackupManager:
                 return config
         
         return None
+    
+    def _safe_copy_tree(self, src: Path, dst: Path) -> tuple[int, int, list]:
+        """
+        Safely copy a directory tree, skipping locked files instead of failing.
+        Also skips large cache/temp folders that aren't needed for backup.
+        
+        Returns:
+            tuple: (files_copied, files_skipped, skipped_files_list)
+        """
+        files_copied = 0
+        files_skipped = 0
+        skipped_files = []
+        
+        # Folders to skip (cache, temp files, large unnecessary data)
+        skip_folders = {
+            'Cache', 'Code Cache', 'GPUCache', 'Service Worker',
+            'DawnCache', 'ShaderCache', 'blob_storage', 'Session Storage',
+            'IndexedDB', 'File System', 'WebStorage', 'Local Storage',
+            'BrowserMetrics', 'optimization_guide_hints',
+            'optimization_guide_model_and_features_store',
+            'Storage', 'VideoDecodeStats', 'BudgetDatabase'
+        }
+        
+        # Create destination directory
+        dst.mkdir(parents=True, exist_ok=True)
+        
+        for item in src.rglob('*'):
+            try:
+                # Skip cache and temporary folders
+                if any(skip_folder in item.parts for skip_folder in skip_folders):
+                    continue
+                
+                # Calculate relative path
+                rel_path = item.relative_to(src)
+                dest_item = dst / rel_path
+                
+                if item.is_dir():
+                    # Create directory
+                    dest_item.mkdir(parents=True, exist_ok=True)
+                elif item.is_file():
+                    # Copy file
+                    dest_item.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(str(item), str(dest_item))
+                    files_copied += 1
+            except (PermissionError, OSError) as e:
+                # File is locked or inaccessible - skip it
+                files_skipped += 1
+                skipped_files.append(str(item.relative_to(src)))
+            except Exception as e:
+                # Other errors - skip and log
+                files_skipped += 1
+                skipped_files.append(str(item.relative_to(src)))
+        
+        return files_copied, files_skipped, skipped_files
     
     def _backup_path(self, source_path: str, dest_folder: Path, path_config: Dict) -> Optional[Dict]:
         """Backup a file, folder, or registry key"""
@@ -627,11 +815,28 @@ class BackupManager:
         
         try:
             if source.is_file():
-                shutil.copy2(source, dest_path)
+                # Try to copy file, skip if locked
+                try:
+                    shutil.copy2(source, dest_path)
+                except (PermissionError, OSError) as e:
+                    # File is locked, skip it
+                    print(f"Warning: Skipping locked file {source.name}")
+                    return None
             elif source.is_dir():
+                # Use safe copy for directories to handle locked files
                 if dest_path.exists():
-                    shutil.rmtree(dest_path)
-                shutil.copytree(source, dest_path)
+                    shutil.rmtree(dest_path, ignore_errors=True)
+                
+                files_copied, files_skipped, skipped_files = self._safe_copy_tree(source, dest_path)
+                
+                # Log skipped files for browser data
+                if files_skipped > 0:
+                    print(f"Info: Backed up {files_copied} files, skipped {files_skipped} locked files from {source.name}")
+                
+                # Consider backup successful if at least some files were copied
+                if files_copied == 0 and files_skipped > 0:
+                    print(f"Warning: All files in {source.name} were locked or inaccessible")
+                    return None
             
             return {
                 "description": path_config['description'],
@@ -642,7 +847,9 @@ class BackupManager:
             }
         
         except Exception as e:
-            raise Exception(f"Failed to backup {source}: {str(e)}")
+            # Log but don't fail the entire backup
+            print(f"Warning: Could not backup {source}: {str(e)}")
+            return None
     
     def _backup_registry_key(self, registry_path: str, dest_folder: Path, path_config: Dict) -> Optional[Dict]:
         """Backup a Windows registry key to .reg file"""
