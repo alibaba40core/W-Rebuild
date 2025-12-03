@@ -38,6 +38,8 @@ release/
 .coverage
 htmlcov/
 *.log
+test_*.py
+*_test.json
 
 # Backup files (test backups)
 backup_*/
