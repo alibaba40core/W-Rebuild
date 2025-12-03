@@ -19,6 +19,7 @@ a = Analysis(
     datas=[
         ('src\\core', 'src\\core'),
         ('src\\cli', 'src\\cli'),
+        ('scripts', 'scripts'),
         ('docs', 'docs'),
         ('README.md', '.'),
         ('LICENSE', '.'),
@@ -65,6 +66,8 @@ exe = EXE(
     entitlements_file=None,
     icon=None,  # Add icon path here if you have one
     version='version_info.txt',
+    uac_admin=True,  # Request admin privileges on startup
+    uac_uiaccess=False,
 )
 
 coll = COLLECT(

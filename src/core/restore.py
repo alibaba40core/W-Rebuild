@@ -487,7 +487,8 @@ class RestoreManager:
                 ['winget', 'list', '--id', winget_id, '--exact'],
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=30,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
             )
             
             # If found in list, it's already installed
@@ -505,7 +506,8 @@ class RestoreManager:
                 ['winget', 'install', '--id', winget_id, '--silent', '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity'],
                 capture_output=True,
                 text=True,
-                timeout=600  # 10 minutes timeout
+                timeout=600,  # 10 minutes timeout
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
             )
             
             # Combine stdout and stderr for full output
@@ -922,7 +924,12 @@ class RestoreManager:
             Write-Host 'Desktop shortcut created'
             '''
             
-            subprocess.run(['powershell', '-Command', desktop_cmd], capture_output=True, timeout=10)
+            subprocess.run(
+                ['powershell', '-Command', desktop_cmd],
+                capture_output=True,
+                timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+            )
             
             # Start Menu shortcut
             startmenu_cmd = f'''
@@ -938,7 +945,12 @@ class RestoreManager:
             Write-Host 'Start Menu shortcut created'
             '''
             
-            subprocess.run(['powershell', '-Command', startmenu_cmd], capture_output=True, timeout=10)
+            subprocess.run(
+                ['powershell', '-Command', startmenu_cmd],
+                capture_output=True,
+                timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+            )
             
             return True
             

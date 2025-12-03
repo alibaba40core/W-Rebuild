@@ -2363,7 +2363,8 @@ class MainWindow(QMainWindow):
                             ['winget', 'list', '--id', winget_id],
                             capture_output=True,
                             text=True,
-                            timeout=10
+                            timeout=10,
+                            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
                         )
                         
                         # If winget list finds it, the tool is already installed
