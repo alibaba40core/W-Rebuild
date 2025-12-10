@@ -583,6 +583,58 @@ class BackupManager:
                         "description": "Vivaldi Registry Settings"
                     }
                 ]
+            },
+            
+            # Enterprise Tools
+            "Omnissa Horizon Client": {
+                "name": "omnissa-horizon",
+                "paths": [
+                    {
+                        "source": r"%APPDATA%\Omnissa\Horizon",
+                        "type": "folder",
+                        "description": "Horizon Client Configuration"
+                    },
+                    {
+                        "source": r"%APPDATA%\VMware\VDM",
+                        "type": "folder",
+                        "description": "VMware Horizon Legacy Configuration"
+                    },
+                    {
+                        "source": r"HKEY_CURRENT_USER\Software\Omnissa\Horizon",
+                        "type": "registry",
+                        "description": "Omnissa Horizon Registry Settings"
+                    },
+                    {
+                        "source": r"HKEY_CURRENT_USER\Software\VMware\VDM",
+                        "type": "registry",
+                        "description": "VMware VDM Registry Settings (Legacy)"
+                    }
+                ]
+            },
+            "RSA Authenticator": {
+                "name": "rsa-authenticator",
+                "paths": [
+                    {
+                        "source": r"%APPDATA%\RSA\Authenticator",
+                        "type": "folder",
+                        "description": "RSA Authenticator Configuration"
+                    },
+                    {
+                        "source": r"%LOCALAPPDATA%\RSA\Authenticator",
+                        "type": "folder",
+                        "description": "RSA Authenticator Local Configuration"
+                    },
+                    {
+                        "source": r"HKEY_CURRENT_USER\Software\RSA\Authenticator",
+                        "type": "registry",
+                        "description": "RSA Authenticator Registry Settings"
+                    },
+                    {
+                        "source": r"HKEY_CURRENT_USER\Software\RSA\SecurID",
+                        "type": "registry",
+                        "description": "RSA SecurID Legacy Registry Settings"
+                    }
+                ]
             }
         }
     

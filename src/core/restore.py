@@ -428,7 +428,9 @@ class RestoreManager:
             'FileZilla': 'TimKosse.FileZilla.Client',
             'Eclipse': 'EclipseAdoptium.Temurin.11.JDK',
             'Maven': 'Apache.Maven',
-            'Gradle': 'Gradle.Gradle'
+            'Gradle': 'Gradle.Gradle',
+            'Omnissa Horizon Client': 'Omnissa.HorizonClient',
+            'RSA Authenticator': 'RSA.Authenticator'
         }
         
         return winget_ids.get(tool_name)
@@ -459,6 +461,12 @@ class RestoreManager:
                 return f'manual:https://www.oracle.com/database/sqldeveloper/technologies/download/|Download Oracle SQL Developer {version} (requires Oracle login, then extract to Program Files)'
             else:
                 return 'manual:https://www.oracle.com/database/sqldeveloper/technologies/download/|Download Oracle SQL Developer (requires Oracle login, then extract to Program Files)'
+        elif tool_name == 'Omnissa Horizon Client':
+            # Omnissa Horizon Client requires registration and download from Omnissa portal
+            return f'manual:https://customerconnect.omnissa.com/downloads/info/slug/virtual_desktop_and_apps/omnissa_horizon_clients/8|Download Omnissa Horizon Client from customer portal (requires account login and product key)'
+        elif tool_name == 'RSA Authenticator':
+            # RSA Authenticator is enterprise software requiring license
+            return f'manual:https://www.rsa.com/en-us/products/securid-suite/securid-software-token|Download RSA Authenticator from RSA website (requires license and account authentication)'
         
         # Fallback to static mappings
         download_urls = {

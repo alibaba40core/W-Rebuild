@@ -30,6 +30,14 @@ foreach ($pattern in $commonPaths) {
 $uniquePythons = $pythonPaths | Select-Object -Unique
 
 foreach ($pythonPath in $uniquePythons) {
+    # Skip virtual environments and tool-specific Python installations
+    $pathLower = $pythonPath.ToLower()
+    
+    # Exclude venv, virtualenv, conda, and development tool paths
+    if ($pathLower -match '\\venv\\|\\virtualenv\\|\\conda\\|\\Scripts\\|\\tools\\|W-Rebuild|LocalAppData.*Python' -and $pathLower -notmatch 'ProgramFiles|Program Files') {
+        continue
+    }
+    
     $versionOutput = & $pythonPath --version 2>&1
     if ($versionOutput -match "Python (\d+\.\d+\.\d+)") {
         $version = $matches[1]
