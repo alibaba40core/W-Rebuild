@@ -1002,14 +1002,39 @@ class RestoreManager:
             
             for item in backed_up_items:
                 item_type = item.get('type')
-                backup_location = item.get('destination')  # Where file was backed up TO
+                backup_location_relative = item.get('destination')  # Relative path in backup
                 restore_target = item.get('source')  # Where to restore it TO (original location)
                 
-                if not backup_location or not restore_target:
+                if not backup_location_relative or not restore_target:
                     continue
                 
-                # backup_location is the full path where the file/folder was backed up
-                # restore_target is where we want to restore it (original AppData location)
+                # Resolve backup_location relative to the working_backup_path
+                # This handles cloud-synced backups where absolute paths differ between machines
+                if os.path.isabs(backup_location_relative):
+                    # Legacy absolute path - try to use it directly first
+                    backup_location = backup_location_relative
+                    # If it doesn't exist, try to extract just the tool folder and file/folder name
+                    if not os.path.exists(backup_location):
+                        # Try to find it relative to backup path
+                        parts = Path(backup_location_relative).parts
+                        # Look for tool folder name in path
+                        try:
+                            # Find the backup folder in path and take everything after it
+                            backup_folder_name = Path(working_backup_path).name
+                            if backup_folder_name in parts:
+                                idx = parts.index(backup_folder_name)
+                                relative_parts = parts[idx+1:]
+                                backup_location = os.path.join(working_backup_path, *relative_parts)
+                            else:
+                                # Fallback: use last 2 parts (tool_folder/item_name)
+                                backup_location = os.path.join(working_backup_path, *parts[-2:])
+                        except (ValueError, IndexError):
+                            backup_location = backup_location_relative
+                else:
+                    # Relative path (new format) - resolve relative to working_backup_path
+                    backup_location = os.path.join(working_backup_path, backup_location_relative)
+                
+                print(f"Restoring: {backup_location_relative} -> {backup_location}")
                 
                 if item_type == 'file':
                     # Restore file

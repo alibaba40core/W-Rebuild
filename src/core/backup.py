@@ -838,10 +838,17 @@ class BackupManager:
                     print(f"Warning: All files in {source.name} were locked or inaccessible")
                     return None
             
+            # Store relative path from backup root for portability across machines
+            try:
+                relative_dest = dest_path.relative_to(dest_folder.parent)
+            except ValueError:
+                # Fallback to just the filename if relative path fails
+                relative_dest = Path(dest_folder.name) / dest_path.name
+            
             return {
                 "description": path_config['description'],
                 "source": str(source),
-                "destination": str(dest_path),
+                "destination": str(relative_dest),  # Store relative path for cloud sync compatibility
                 "type": path_config['type'],
                 "size_bytes": self._get_size(dest_path)
             }
@@ -874,10 +881,16 @@ class BackupManager:
             )
             
             if result.returncode == 0 and dest_file.exists():
+                # Store relative path from backup root for portability
+                try:
+                    relative_dest = dest_file.relative_to(dest_folder.parent)
+                except ValueError:
+                    relative_dest = Path(dest_folder.name) / dest_file.name
+                
                 return {
                     "description": path_config['description'],
                     "source": registry_path,
-                    "destination": str(dest_file),
+                    "destination": str(relative_dest),  # Store relative path
                     "type": "registry",
                     "size_bytes": dest_file.stat().st_size
                 }
@@ -919,10 +932,16 @@ class BackupManager:
                     with open(extensions_file, 'w', encoding='utf-8') as f:
                         f.write('\n'.join(extensions))
                     
+                    # Store relative path from backup root
+                    try:
+                        relative_dest = extensions_file.relative_to(dest_folder.parent)
+                    except ValueError:
+                        relative_dest = Path(dest_folder.name) / extensions_file.name
+                    
                     return {
                         "description": "Extensions List",
                         "source": f"{command} CLI",
-                        "destination": str(extensions_file),
+                        "destination": str(relative_dest),  # Store relative path
                         "type": "extensions",
                         "count": len(extensions)
                     }
@@ -960,10 +979,16 @@ class BackupManager:
                 with open(plugins_file, 'w', encoding='utf-8') as f:
                     f.write('\n'.join(sorted(set(plugins_list))))
                 
+                # Store relative path from backup root
+                try:
+                    relative_dest = plugins_file.relative_to(dest_folder.parent)
+                except ValueError:
+                    relative_dest = Path(dest_folder.name) / plugins_file.name
+                
                 return {
                     "description": "Plugins List",
                     "source": "Plugin directories",
-                    "destination": str(plugins_file),
+                    "destination": str(relative_dest),  # Store relative path
                     "type": "plugins",
                     "count": len(set(plugins_list))
                 }
@@ -988,10 +1013,16 @@ class BackupManager:
                     with open(packages_file, 'w', encoding='utf-8') as f:
                         f.write('\n'.join(sorted(packages)))
                     
+                    # Store relative path from backup root
+                    try:
+                        relative_dest = packages_file.relative_to(dest_folder.parent)
+                    except ValueError:
+                        relative_dest = Path(dest_folder.name) / packages_file.name
+                    
                     return {
                         "description": "Packages List",
                         "source": str(packages_path),
-                        "destination": str(packages_file),
+                        "destination": str(relative_dest),  # Store relative path
                         "type": "packages",
                         "count": len(packages)
                     }
