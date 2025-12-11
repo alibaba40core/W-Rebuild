@@ -192,12 +192,14 @@ class BackupManager:
                     {
                         "source": r"%USERPROFILE%\Documents\MobaXterm",
                         "type": "folder",
-                        "description": "Sessions and Configuration"
+                        "description": "Sessions and Configuration",
+                        "exclude": ["slash"]  # Exclude Linux subsystem files
                     },
                     {
                         "source": r"%APPDATA%\MobaXterm",
                         "type": "folder",
-                        "description": "AppData Configuration"
+                        "description": "AppData Configuration",
+                        "exclude": ["slash"]  # Exclude Linux subsystem files
                     },
                     {
                         "source": r"%USERPROFILE%\MobaXterm.ini",
@@ -785,10 +787,15 @@ class BackupManager:
         
         return None
     
-    def _safe_copy_tree(self, src: Path, dst: Path) -> tuple[int, int, list]:
+    def _safe_copy_tree(self, src: Path, dst: Path, exclude_dirs: list = None) -> tuple[int, int, list]:
         """
         Safely copy a directory tree, skipping locked files instead of failing.
         Also skips large cache/temp folders that aren't needed for backup.
+        
+        Args:
+            src: Source directory path
+            dst: Destination directory path
+            exclude_dirs: Additional directory names to exclude (e.g., ['slash'] for MobaXterm)
         
         Returns:
             tuple: (files_copied, files_skipped, skipped_files_list)
@@ -797,15 +804,63 @@ class BackupManager:
         files_skipped = 0
         skipped_files = []
         
-        # Folders to skip (cache, temp files, large unnecessary data)
+        # Folders and files to skip (cache/temp/logs that don't contain user config)
         skip_folders = {
-            'Cache', 'Code Cache', 'GPUCache', 'Service Worker',
-            'DawnCache', 'ShaderCache', 'blob_storage', 'Session Storage',
-            'IndexedDB', 'File System', 'WebStorage', 'Local Storage',
-            'BrowserMetrics', 'optimization_guide_hints',
-            'optimization_guide_model_and_features_store',
-            'Storage', 'VideoDecodeStats', 'BudgetDatabase'
+            # Browser caches
+            'Cache',  # Chrome/Firefox cache
+            'Code Cache',  # V8 compiled code cache
+            'GPUCache',  # GPU cache
+            'Service Worker',  # Service worker cache
+            'DawnCache',  # Graphics cache
+            'ShaderCache',  # Shader cache
+            'blob_storage',  # Blob cache
+            'VideoDecodeStats',  # Video stats
+            'BudgetDatabase',  # Budget data (temporary)
+            'Optimization Guide Hints',  # Chromium optimization hints
+            'optimization_guide_hints',  # Alternative name
+            'optimization_guide_model_and_features_store',  # ML model cache
+            'Crash Reports',  # Crash data
+            'CrashDumps',  # Crash dumps
+            'PepperFlash',  # Flash cache
+            'SafetyTips',  # Safety tips cache
+            
+            # SQL Developer caches
+            'system_cache',  # SQL Developer system cache (regenerated)
+            'oracle.javatools.cache',  # Java tools cache
+            
+            # VS Code caches
+            'CachedData',  # VS Code cached data
+            'CachedExtensions',  # Cached extensions
+            'CachedExtensionVSIXs',  # Cached VSIX files
+            'logs',  # Log files
+            'User/workspaceStorage',  # Workspace storage (project-specific)
+            
+            # JetBrains caches
+            'system',  # JetBrains system cache
+            
+            # Node/NPM caches
+            'node_modules',  # NPM packages (should be in project, not config)
+            
+            # General temp/cache
+            'temp',
+            'tmp',
+            'Temp',
+            'Tmp',
         }
+        
+        # File patterns to skip
+        skip_file_patterns = {
+            '.log',  # Log files
+            '.lck',  # Lock files
+            '.tmp',  # Temporary files
+            'usages-tracking',  # Usage tracking logs
+            'jdev-usages-',  # SQL Developer usage logs
+            'sqldev-usages-',  # SQL Developer usage logs
+        }
+        
+        # Add custom exclusions if provided
+        if exclude_dirs:
+            skip_folders.update(exclude_dirs)
         
         # Create destination directory
         dst.mkdir(parents=True, exist_ok=True)
@@ -815,6 +870,11 @@ class BackupManager:
                 # Skip cache and temporary folders
                 if any(skip_folder in item.parts for skip_folder in skip_folders):
                     continue
+                
+                # Skip files matching unwanted patterns
+                if item.is_file():
+                    if any(pattern in item.name for pattern in skip_file_patterns):
+                        continue
                 
                 # Calculate relative path
                 rel_path = item.relative_to(src)
@@ -879,7 +939,9 @@ class BackupManager:
                 if dest_path.exists():
                     shutil.rmtree(dest_path, ignore_errors=True)
                 
-                files_copied, files_skipped, skipped_files = self._safe_copy_tree(source, dest_path)
+                # Get exclude directories from path config if provided
+                exclude_dirs = path_config.get('exclude', [])
+                files_copied, files_skipped, skipped_files = self._safe_copy_tree(source, dest_path, exclude_dirs)
                 
                 # Log skipped files for browser data
                 if files_skipped > 0:

@@ -79,6 +79,7 @@ class MainWindow(QMainWindow):
     
     # Define custom signal for restore progress updates
     restore_progress_signal = Signal(int, str, str)  # current, message, msg_type
+    restore_detailed_log_signal = Signal(str, str)  # detailed message, msg_type
     
     def __init__(self):
         super().__init__()
@@ -93,6 +94,7 @@ class MainWindow(QMainWindow):
         
         # Connect restore progress signal
         self.restore_progress_signal.connect(self._handle_restore_progress)
+        self.restore_detailed_log_signal.connect(self._handle_restore_detailed_log)
         
         # Get screen size for responsive design
         self.setup_screen_dimensions()
@@ -2261,15 +2263,15 @@ class MainWindow(QMainWindow):
     
     def show_restore_progress(self, backup_path, selected_missing, selected_installed, selected_env_vars, is_compressed, extracted_path):
         """Show installation and restore progress dialog"""
-        from PySide6.QtWidgets import QDialog, QDialogButtonBox, QTextEdit
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox, QTextEdit, QTabWidget
         
         total_items = len(selected_missing) + len(selected_installed) + len(selected_env_vars)
         
         # Create progress dialog
         progress_dialog = QDialog(self)
         progress_dialog.setWindowTitle("Restoring Backup")
-        progress_dialog.setMinimumWidth(700)
-        progress_dialog.setMinimumHeight(450)
+        progress_dialog.setMinimumWidth(800)
+        progress_dialog.setMinimumHeight(550)
         
         layout = QVBoxLayout(progress_dialog)
         
@@ -2283,7 +2285,11 @@ class MainWindow(QMainWindow):
         self.restore_progress_bar.setValue(0)
         layout.addWidget(self.restore_progress_bar)
         
-        # Log text area
+        # Create tab widget for Summary and Detailed Logs
+        tab_widget = QTabWidget()
+        layout.addWidget(tab_widget)
+        
+        # Summary tab (original summary display)
         self.restore_log_text = QTextEdit()
         self.restore_log_text.setReadOnly(True)
         self.restore_log_text.setStyleSheet(f"""
@@ -2295,7 +2301,21 @@ class MainWindow(QMainWindow):
                 border: 1px solid #444;
             }}
         """)
-        layout.addWidget(self.restore_log_text)
+        tab_widget.addTab(self.restore_log_text, "📋 Summary")
+        
+        # Detailed Logs tab (new detailed logs display)
+        self.restore_detailed_log_text = QTextEdit()
+        self.restore_detailed_log_text.setReadOnly(True)
+        self.restore_detailed_log_text.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: #1E1E1E;
+                color: #D4D4D4;
+                font-family: Consolas, monospace;
+                font-size: {self.font_size_small}px;
+                border: 1px solid #444;
+            }}
+        """)
+        tab_widget.addTab(self.restore_detailed_log_text, "🔍 Detailed Logs")
         
         # Close button (disabled during restore)
         button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
@@ -2318,12 +2338,19 @@ class MainWindow(QMainWindow):
         self.restore_results = []
         self.restore_current = 0
         self.restore_total = len(selected_missing) + len(selected_installed) + len(selected_env_vars)
+        self.restore_stats = {
+            'installed_tools': 0,
+            'restored_configs': 0,
+            'restored_env_vars': 0,
+            'failed_installs': 0,
+            'failed_restores': 0
+        }
         
         def restore_worker():
             # Show summary at the beginning
-            self.update_restore_progress("="*60, "info")
+            self.update_restore_progress("=" * 70, "info")
             self.update_restore_progress("RESTORE SUMMARY", "info")
-            self.update_restore_progress("="*60, "info")
+            self.update_restore_progress("=" * 70, "info")
             
             if selected_missing:
                 self.update_restore_progress(f"\n📦 Tools to install/check: {len(selected_missing)}", "info")
@@ -2341,123 +2368,272 @@ class MainWindow(QMainWindow):
                     var_value_preview = var['value'][:50] + '...' if len(var['value']) > 50 else var['value']
                     self.update_restore_progress(f"  • {var['name']} = {var_value_preview}", "info")
             
-            self.update_restore_progress("\n" + "="*60, "info")
+            self.update_restore_progress("\n" + "=" * 70, "info")
             self.update_restore_progress("Starting restore process...\n", "info")
             
             # Phase 1: Install missing tools (or restore if already installed)
-            for i, tool in enumerate(selected_missing):
-                self.restore_current = i + 1
-                tool_name = tool['name']
+            if selected_missing:
+                self.update_restore_progress("\n[PHASE 1] Installing Tools", "info")
+                self.update_restore_progress("-" * 70, "info")
                 
-                # First check if tool is actually already installed
-                # This happens when winget shows it as available but detection missed it
-                self.update_restore_progress(f"Checking {tool_name}...", "info")
-                
-                try:
-                    winget_id = tool.get('winget_id')
+                for i, tool in enumerate(selected_missing):
+                    self.restore_current = i + 1
+                    tool_name = tool['name']
                     
-                    # Try to check if already installed via winget list
-                    if winget_id:
-                        import subprocess
-                        check_result = subprocess.run(
-                            ['winget', 'list', '--id', winget_id],
-                            capture_output=True,
-                            text=True,
-                            timeout=10,
-                            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
-                        )
+                    # Detailed logging for each tool
+                    self.update_restore_progress(f"\n({i+1}/{len(selected_missing)}) Tool: {tool_name}", "info")
+                    self.update_restore_progress(f"  Version: {tool.get('version', 'Unknown')}", "info")
+                    self.update_restore_detailed_log(f"\n[Tool {i+1}/{len(selected_missing)}] Processing: {tool_name}", "debug")
+                    
+                    # First check if tool is actually already installed
+                    self.update_restore_progress(f"  → Checking if already installed...", "info")
+                    self.update_restore_detailed_log(f"  [Check] Checking if {tool_name} is already installed", "debug")
+                    
+                    try:
+                        winget_id = tool.get('winget_id')
+                        self.update_restore_detailed_log(f"  [Check] Winget ID: {winget_id}", "debug")
                         
-                        # If winget list finds it, the tool is already installed
-                        if check_result.returncode == 0 and winget_id.lower() in check_result.stdout.lower():
-                            self.update_restore_progress(f"✓ {tool_name} is already installed, restoring configuration...", "info")
-                            
-                            # Restore configs instead of installing
-                            tool_data = tool['backup_data']
-                            result = self.restore_manager.restore_tool_configs(
-                                backup_path, tool_name, tool_data, is_compressed, extracted_path
+                        # Try to check if already installed via winget list
+                        if winget_id:
+                            import subprocess
+                            self.update_restore_detailed_log(f"  [Check] Running: winget list --id {winget_id}", "debug")
+                            check_result = subprocess.run(
+                                ['winget', 'list', '--id', winget_id],
+                                capture_output=True,
+                                text=True,
+                                timeout=10,
+                                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
                             )
-                            if result.get('success'):
-                                restored_count = len(result.get('restored_items', []))
-                                self.update_restore_progress(f"✓ Restored configuration for {tool_name} ({restored_count} items)", "success")
+                            
+                            self.update_restore_detailed_log(f"  [Check] Return code: {check_result.returncode}", "debug")
+                            if check_result.stdout:
+                                self.update_restore_detailed_log(f"  [Check] stdout: {check_result.stdout[:200]}", "debug")
+                            if check_result.stderr:
+                                self.update_restore_detailed_log(f"  [Check] stderr: {check_result.stderr[:200]}", "debug")
+                            
+                            # If winget list finds it, the tool is already installed
+                            if check_result.returncode == 0 and winget_id.lower() in check_result.stdout.lower():
+                                self.update_restore_progress(f"  ✓ Already installed", "success")
+                                self.update_restore_detailed_log(f"  [Success] {tool_name} is already installed", "success")
+                                self.update_restore_progress(f"  → Restoring configuration...", "info")
+                                self.update_restore_detailed_log(f"  [Restore] Starting config restoration for {tool_name}", "debug")
+                                
+                                # Restore configs instead of installing
+                                tool_data = tool['backup_data']
+                                result = self.restore_manager.restore_tool_configs(
+                                    backup_path, tool_name, tool_data, is_compressed, extracted_path
+                                )
+                                if result.get('success'):
+                                    restored_count = len(result.get('restored_items', []))
+                                    restored_items = result.get('restored_items', [])
+                                    self.update_restore_progress(f"  ✓ Restored {restored_count} config file(s)", "success")
+                                    self.update_restore_detailed_log(f"  [Success] Restored {restored_count} config files:", "success")
+                                    for item in restored_items:
+                                        self.update_restore_detailed_log(f"    • {item}", "success")
+                                    self.restore_stats['restored_configs'] += 1
+                                else:
+                                    error_msg = result.get('error', 'Unknown error')
+                                    self.update_restore_progress(f"  ⚠ Config restore skipped (may not have configs)", "warning")
+                                    self.update_restore_detailed_log(f"  [Warning] Config restore skipped: {error_msg}", "warning")
+                                self.update_restore_progress("", "info")
+                                continue
+                        
+                        # Not installed, proceed with installation
+                        self.update_restore_progress(f"  → Not found, proceeding with installation...", "info")
+                        self.update_restore_detailed_log(f"  [Install] {tool_name} not found, starting installation", "debug")
+                        
+                        if winget_id:
+                            self.update_restore_progress(f"  → Installing from winget (ID: {winget_id})...", "info")
+                            self.update_restore_detailed_log(f"  [Install] Command: winget install --id {winget_id} --silent --accept-source-agreements", "debug")
+                            result = self.restore_manager.install_tool_with_winget(tool_name, winget_id)
+                            
+                            self.update_restore_detailed_log(f"  [Install] Result success: {result.get('success')}", "debug")
+                            if result.get('error'):
+                                self.update_restore_detailed_log(f"  [Install] Error: {result.get('error')}", "debug")
+                            if result.get('output'):
+                                self.update_restore_detailed_log(f"  [Install] Output: {result.get('output')[:300]}", "debug")
+                            
+                            if result['success']:
+                                self.update_restore_progress(f"  ✓ Installation completed", "success")
+                                self.update_restore_detailed_log(f"  [Success] {tool_name} installed successfully", "success")
+                                self.restore_stats['installed_tools'] += 1
+                                
+                                # After installation, try to restore configs
+                                self.update_restore_progress(f"  → Restoring configuration...", "info")
+                                self.update_restore_detailed_log(f"  [Restore] Starting config restoration for {tool_name}", "debug")
+                                tool_data = tool['backup_data']
+                                config_result = self.restore_manager.restore_tool_configs(
+                                    backup_path, tool_name, tool_data, is_compressed, extracted_path
+                                )
+                                if config_result.get('success'):
+                                    restored_count = len(config_result.get('restored_items', []))
+                                    restored_items = config_result.get('restored_items', [])
+                                    self.update_restore_progress(f"  ✓ Restored {restored_count} config file(s)", "success")
+                                    self.update_restore_detailed_log(f"  [Success] Restored {restored_count} config files:", "success")
+                                    for item in restored_items:
+                                        self.update_restore_detailed_log(f"    • {item}", "success")
+                                    self.restore_stats['restored_configs'] += 1
+                                else:
+                                    error_msg = config_result.get('error', 'Unknown error')
+                                    self.update_restore_progress(f"  ⚠ No configs to restore", "warning")
+                                    self.update_restore_detailed_log(f"  [Warning] Config restore skipped: {error_msg}", "warning")
                             else:
-                                self.update_restore_progress(f"⚠ {tool_name} installed but config restore skipped", "warning")
-                            continue
-                    
-                    # Not installed, proceed with installation
-                    self.update_restore_progress(f"Installing {tool_name}...", "info")
-                    
-                    if winget_id:
-                        result = self.restore_manager.install_tool_with_winget(tool_name, winget_id)
-                        if result['success']:
-                            self.update_restore_progress(f"✓ Installed {tool_name}", "success")
-                            
-                            # After installation, try to restore configs
-                            tool_data = tool['backup_data']
-                            config_result = self.restore_manager.restore_tool_configs(
-                                backup_path, tool_name, tool_data, is_compressed, extracted_path
-                            )
-                            if config_result.get('success'):
-                                restored_count = len(config_result.get('restored_items', []))
-                                self.update_restore_progress(f"✓ Restored configuration for {tool_name} ({restored_count} items)", "success")
+                                error_msg = result.get('error', 'Unknown error')
+                                self.update_restore_progress(f"  ✗ Installation failed: {error_msg}", "error")
+                                self.update_restore_detailed_log(f"  [Error] Installation failed: {error_msg}", "error")
+                                self.restore_stats['failed_installs'] += 1
                         else:
-                            self.update_restore_progress(f"✗ Failed to install {tool_name}: {result.get('error', 'Unknown error')}", "error")
-                    else:
-                        self.update_restore_progress(f"⚠ {tool_name} requires manual installation", "warning")
+                            self.update_restore_progress(f"  ⚠ Requires manual installation (no winget ID)", "warning")
+                            self.update_restore_detailed_log(f"  [Warning] No winget ID available for {tool_name}", "warning")
                         
-                except Exception as e:
-                    self.update_restore_progress(f"✗ Error processing {tool_name}: {str(e)}", "error")
-                
-                # Add separator after each tool
-                self.update_restore_progress("-" * 60, "info")
+                        self.update_restore_progress("", "info")
+                    except Exception as e:
+                        error_msg = str(e)
+                        self.update_restore_progress(f"  ✗ Error: {error_msg}", "error")
+                        self.update_restore_detailed_log(f"  [Exception] Error processing {tool_name}: {error_msg}", "error")
+                        self.restore_stats['failed_installs'] += 1
+                        self.update_restore_progress("", "info")
             
             # Phase 2: Restore configs for installed tools/browsers
-            for i, tool in enumerate(selected_installed):
-                self.restore_current = len(selected_missing) + i + 1
-                self.update_restore_progress(f"Restoring configuration for {tool['name']}...", "info")
+            if selected_installed:
+                self.update_restore_progress("\n[PHASE 2] Restoring Configurations", "info")
+                self.update_restore_progress("-" * 70, "info")
+                self.update_restore_detailed_log(f"\n[PHASE 2] Restoring {len(selected_installed)} tool(s) configuration", "debug")
                 
-                try:
+                for i, tool in enumerate(selected_installed):
+                    self.restore_current = len(selected_missing) + i + 1
                     tool_name = tool['name']
-                    tool_data = tool['backup_data']
                     
-                    result = self.restore_manager.restore_tool_configs(
-                        backup_path, tool_name, tool_data, is_compressed, extracted_path
-                    )
-                    if result.get('success'):
-                        restored_count = len(result.get('restored_items', []))
-                        self.update_restore_progress(f"✓ Restored configuration for {tool_name} ({restored_count} items)", "success")
-                    else:
-                        self.update_restore_progress(f"✗ Failed to restore {tool_name}: {result.get('error', 'Unknown error')}", "error")
-                except Exception as e:
-                    self.update_restore_progress(f"✗ Error restoring {tool['name']}: {str(e)}", "error")
-                
-                # Add separator after each tool
-                self.update_restore_progress("-" * 60, "info")
+                    # Detailed logging for each tool
+                    self.update_restore_progress(f"\n({i+1}/{len(selected_installed)}) Tool: {tool_name}", "info")
+                    self.update_restore_progress(f"  Version: {tool.get('version', 'Unknown')}", "info")
+                    self.update_restore_progress(f"  → Restoring configuration...", "info")
+                    self.update_restore_detailed_log(f"\n[Config {i+1}/{len(selected_installed)}] Restoring {tool_name}", "debug")
+                    
+                    try:
+                        tool_data = tool['backup_data']
+                        self.update_restore_detailed_log(f"  [Restore] Backup data keys: {list(tool_data.keys())}", "debug")
+                        
+                        result = self.restore_manager.restore_tool_configs(
+                            backup_path, tool_name, tool_data, is_compressed, extracted_path
+                        )
+                        if result.get('success'):
+                            restored_count = len(result.get('restored_items', []))
+                            restored_items = result.get('restored_items', [])
+                            self.update_restore_progress(f"  ✓ Restoration completed - {restored_count} file(s) restored:", "success")
+                            self.update_restore_detailed_log(f"  [Success] Restored {restored_count} file(s):", "success")
+                            for item in restored_items[:3]:  # Show first 3 items
+                                self.update_restore_progress(f"     • {item}", "success")
+                                self.update_restore_detailed_log(f"    • {item}", "success")
+                            if len(restored_items) > 3:
+                                self.update_restore_progress(f"     • ... and {len(restored_items) - 3} more", "success")
+                                self.update_restore_detailed_log(f"    • ... and {len(restored_items) - 3} more", "success")
+                            self.restore_stats['restored_configs'] += 1
+                        else:
+                            error_msg = result.get('error', 'Unknown error')
+                            self.update_restore_progress(f"  ✗ Failed to restore: {error_msg}", "error")
+                            self.update_restore_detailed_log(f"  [Error] Failed to restore: {error_msg}", "error")
+                            self.restore_stats['failed_restores'] += 1
+                    except Exception as e:
+                        error_msg = str(e)
+                        self.update_restore_progress(f"  ✗ Error: {error_msg}", "error")
+                        self.update_restore_detailed_log(f"  [Exception] Error restoring {tool_name}: {error_msg}", "error")
+                        self.restore_stats['failed_restores'] += 1
+                    
+                    self.update_restore_progress("", "info")
             
             # Phase 3: Restore environment variables
-            for i, env_var in enumerate(selected_env_vars):
-                self.restore_current = len(selected_missing) + len(selected_installed) + i + 1
-                self.update_restore_progress(f"Restoring variable {env_var['name']}...", "info")
+            if selected_env_vars:
+                self.update_restore_progress("\n[PHASE 3] Restoring Environment Variables", "info")
+                self.update_restore_progress("-" * 70, "info")
+                self.update_restore_detailed_log(f"\n[PHASE 3] Restoring {len(selected_env_vars)} environment variable(s)", "debug")
                 
-                try:
-                    result = self.restore_manager.restore_environment_variable(env_var['name'], env_var['value'])
-                    if result.get('success'):
-                        self.update_restore_progress(f"✓ Restored {env_var['name']}", "success")
-                    else:
-                        self.update_restore_progress(f"✗ Failed to restore {env_var['name']}: {result.get('error', 'Unknown error')}", "error")
-                except Exception as e:
-                    self.update_restore_progress(f"✗ Error restoring {env_var['name']}: {str(e)}", "error")
-                
-                # Add separator after each variable
-                self.update_restore_progress("-" * 60, "info")
+                for i, env_var in enumerate(selected_env_vars):
+                    self.restore_current = len(selected_missing) + len(selected_installed) + i + 1
+                    var_name = env_var['name']
+                    
+                    # Detailed logging for each variable
+                    self.update_restore_progress(f"\n({i+1}/{len(selected_env_vars)}) Variable: {var_name}", "info")
+                    var_value_preview = env_var['value'][:60] + '...' if len(env_var['value']) > 60 else env_var['value']
+                    self.update_restore_progress(f"  Value: {var_value_preview}", "info")
+                    self.update_restore_detailed_log(f"\n[EnvVar {i+1}/{len(selected_env_vars)}] Variable: {var_name}", "debug")
+                    self.update_restore_detailed_log(f"  Value: {env_var['value']}", "debug")
+                    self.update_restore_progress(f"  → Restoring...", "info")
+                    self.update_restore_detailed_log(f"  [Restore] Setting environment variable", "debug")
+                    
+                    try:
+                        result = self.restore_manager.restore_environment_variable(var_name, env_var['value'])
+                        if result.get('success'):
+                            self.update_restore_progress(f"  ✓ Restored successfully", "success")
+                            self.update_restore_detailed_log(f"  [Success] {var_name} restored successfully", "success")
+                            self.restore_stats['restored_env_vars'] += 1
+                        else:
+                            error_msg = result.get('error', 'Unknown error')
+                            self.update_restore_progress(f"  ✗ Failed: {error_msg}", "error")
+                            self.update_restore_detailed_log(f"  [Error] Failed to restore {var_name}: {error_msg}", "error")
+                    except Exception as e:
+                        error_msg = str(e)
+                        self.update_restore_progress(f"  ✗ Error: {error_msg}", "error")
+                        self.update_restore_detailed_log(f"  [Exception] Error setting {var_name}: {error_msg}", "error")
+                    
+                    self.update_restore_progress("", "info")
             
             # Cleanup extracted backup if needed
             if is_compressed and extracted_path:
+                self.update_restore_detailed_log(f"\n[Cleanup] Removing temporary extracted backup: {extracted_path}", "debug")
                 self.restore_manager._cleanup_extracted_backup(extracted_path)
+                self.update_restore_detailed_log(f"[Cleanup] Temporary files cleaned up", "success")
             
-            # Complete - increment progress to reach 100%
-            self.restore_current = len(selected_missing) + len(selected_installed) + len(selected_env_vars) + 1
-            self.update_restore_progress("\n✓ Restore completed!", "success")
+            # Final summary
+            self.restore_current = self.restore_total
+            self.update_restore_progress("\n" + "=" * 70, "info")
+            self.update_restore_progress("RESTORATION COMPLETED - FINAL SUMMARY", "success")
+            self.update_restore_progress("=" * 70, "info")
+            self.update_restore_progress(f"✓ Tools Installed: {self.restore_stats['installed_tools']}", "success")
+            self.update_restore_progress(f"✓ Configurations Restored: {self.restore_stats['restored_configs']}", "success")
+            self.update_restore_progress(f"✓ Environment Variables Restored: {self.restore_stats['restored_env_vars']}", "success")
+            
+            if self.restore_stats['failed_installs'] > 0:
+                self.update_restore_progress(f"✗ Failed Installations: {self.restore_stats['failed_installs']}", "error")
+            if self.restore_stats['failed_restores'] > 0:
+                self.update_restore_progress(f"✗ Failed Restorations: {self.restore_stats['failed_restores']}", "error")
+            
+            self.update_restore_progress("=" * 70, "info")
+            
+            # Detailed log final summary
+            self.update_restore_detailed_log(f"\n{'='*70}", "info")
+            self.update_restore_detailed_log("RESTORATION COMPLETED - DETAILED SUMMARY", "info")
+            self.update_restore_detailed_log(f"{'='*70}", "info")
+            self.update_restore_detailed_log(f"✓ Tools Installed: {self.restore_stats['installed_tools']}", "success")
+            self.update_restore_detailed_log(f"✓ Configurations Restored: {self.restore_stats['restored_configs']}", "success")
+            self.update_restore_detailed_log(f"✓ Environment Variables Restored: {self.restore_stats['restored_env_vars']}", "success")
+            
+            if self.restore_stats['failed_installs'] > 0:
+                self.update_restore_detailed_log(f"✗ Failed Installations: {self.restore_stats['failed_installs']}", "error")
+            if self.restore_stats['failed_restores'] > 0:
+                self.update_restore_detailed_log(f"✗ Failed Restorations: {self.restore_stats['failed_restores']}", "error")
+            
+            self.update_restore_detailed_log(f"{'='*70}", "info")
+            self.update_restore_detailed_log("Restoration process finished successfully", "success")
+            
+            # Enable close button and show completion popup
             self.restore_close_btn.setEnabled(True)
+            
+            # Show completion popup with greeting message
+            greeting_messages = [
+                "🎉 Restoration complete! Your system is ready to go!",
+                "✨ Welcome back! Your tools and settings have been restored.",
+                "🚀 All set! Your development environment is back in action!",
+                "👏 Success! Your setup is now fully restored and ready to use.",
+                "🌟 Perfect! Your system configuration has been restored successfully!"
+            ]
+            
+            import random
+            greeting = random.choice(greeting_messages)
+            
+            # Emit signal to show popup from main thread
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(500, lambda: self._show_completion_popup(greeting, progress_dialog))
         
         thread = threading.Thread(target=restore_worker, daemon=True)
         thread.start()
@@ -2491,6 +2667,118 @@ class MainWindow(QMainWindow):
         # Auto-scroll to bottom
         scrollbar = self.restore_log_text.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
+    
+    def _handle_restore_detailed_log(self, message, msg_type):
+        """Handle detailed log updates in main thread"""
+        # Add message to detailed log with color
+        color = {
+            "info": "#D4D4D4",
+            "success": "#4EC9B0",
+            "warning": "#FFA500",
+            "error": "#F48771",
+            "debug": "#858585"
+        }.get(msg_type, "#D4D4D4")
+        
+        self.restore_detailed_log_text.append(f"<span style='color: {color};'>{message}</span>")
+        
+        # Auto-scroll to bottom
+        scrollbar = self.restore_detailed_log_text.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+    
+    def update_restore_detailed_log(self, message, msg_type="info"):
+        """Update detailed logs from worker thread"""
+        # Emit signal to update UI from main thread
+        self.restore_detailed_log_signal.emit(message, msg_type)
+    
+    def _show_completion_popup(self, greeting_message, progress_dialog):
+        """Show completion popup with greeting and close prompt"""
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QFont
+        
+        # Create completion dialog
+        completion_dialog = QDialog(self)
+        completion_dialog.setWindowTitle("✓ Restoration Complete!")
+        completion_dialog.setMinimumWidth(500)
+        completion_dialog.setMinimumHeight(250)
+        completion_dialog.setModal(True)
+        completion_dialog.setStyleSheet("""
+            QDialog {
+                background-color: #1E1E1E;
+            }
+            QLabel {
+                color: #D4D4D4;
+            }
+            QPushButton {
+                background-color: #0E639C;
+                color: #FFFFFF;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #1177BB;
+            }
+            QPushButton:pressed {
+                background-color: #0D5A96;
+            }
+        """)
+        
+        layout = QVBoxLayout(completion_dialog)
+        layout.setSpacing(20)
+        layout.setContentsMargins(30, 30, 30, 30)
+        
+        # Greeting message with larger font
+        greeting_label = QLabel(greeting_message)
+        greeting_font = QFont()
+        greeting_font.setPointSize(14)
+        greeting_font.setBold(True)
+        greeting_label.setFont(greeting_font)
+        greeting_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(greeting_label)
+        
+        # Summary section
+        summary_label = QLabel()
+        summary_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        summary_text = f"""
+        <b>Restoration Summary:</b><br><br>
+        ✓ Tools Installed: {self.restore_stats['installed_tools']}<br>
+        ✓ Configurations Restored: {self.restore_stats['restored_configs']}<br>
+        ✓ Environment Variables Restored: {self.restore_stats['restored_env_vars']}
+        """
+        
+        if self.restore_stats['failed_installs'] > 0:
+            summary_text += f"<br>✗ Failed Installations: {self.restore_stats['failed_installs']}"
+        if self.restore_stats['failed_restores'] > 0:
+            summary_text += f"<br>✗ Failed Restorations: {self.restore_stats['failed_restores']}"
+        
+        summary_label.setText(summary_text)
+        layout.addWidget(summary_label)
+        
+        # Instruction label
+        instruction_label = QLabel("Please close this tool to complete the restoration process.")
+        instruction_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        instruction_font = QFont()
+        instruction_font.setItalic(True)
+        instruction_font.setPointSize(10)
+        instruction_label.setFont(instruction_font)
+        layout.addWidget(instruction_label)
+        
+        # Add stretch
+        layout.addStretch()
+        
+        # Close button
+        close_btn = QPushButton("Close Tool")
+        close_btn.clicked.connect(completion_dialog.accept)
+        layout.addWidget(close_btn)
+        
+        # Show dialog and close everything when accepted
+        completion_dialog.exec()
+        
+        # Close progress dialog and main window
+        progress_dialog.reject()
+        self.close()
     
     def toggle_all_checkboxes(self, table, checked):
         """Toggle all checkboxes in the table"""

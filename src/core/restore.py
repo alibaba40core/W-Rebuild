@@ -102,6 +102,49 @@ class RestoreManager:
         except Exception as e:
             print(f"Failed to cleanup extracted backup: {e}")
     
+    def _merge_directory(self, src: str, dst: str):
+        """
+        Merge source directory into destination directory.
+        Copies all files from src to dst, overwriting only if different.
+        Useful for browser profile restoration where we want to preserve existing files
+        and add/update backed up files without wiping newer local data.
+        
+        Args:
+            src: Source directory path
+            dst: Destination directory path
+        """
+        import shutil
+        
+        src_path = Path(src)
+        dst_path = Path(dst)
+        
+        # Ensure destination exists
+        dst_path.mkdir(parents=True, exist_ok=True)
+        
+        # Recursively copy files
+        for src_item in src_path.rglob('*'):
+            try:
+                # Calculate relative path
+                rel_path = src_item.relative_to(src_path)
+                dst_item = dst_path / rel_path
+                
+                if src_item.is_dir():
+                    # Create directory if it doesn't exist
+                    dst_item.mkdir(parents=True, exist_ok=True)
+                elif src_item.is_file():
+                    # Create parent directory
+                    dst_item.parent.mkdir(parents=True, exist_ok=True)
+                    
+                    # Copy file (overwrites existing)
+                    try:
+                        shutil.copy2(str(src_item), str(dst_item))
+                    except (PermissionError, OSError):
+                        # File might be locked - skip
+                        continue
+            except Exception as e:
+                # Continue on error
+                continue
+    
     def list_available_backups(self) -> List[Dict]:
         """
         List all available backup folders and zip files in the backup root directory
@@ -333,11 +376,25 @@ class RestoreManager:
             tool_name = backup_tool['name']
             tool_version = backup_tool['version']
             
-            # Check if tool exists in detected tools (case-insensitive)
+            # Normalize tool name by removing "(Config Only)" suffix for matching
+            normalized_tool_name = tool_name.replace(" (Config Only)", "").lower()
+            
+            # Check if tool exists in detected tools (case-insensitive, flexible matching)
             detected_tool = detected_dict.get(tool_name.lower())
             
+            # If exact match fails, try normalized name
+            if not detected_tool:
+                detected_tool = detected_dict.get(normalized_tool_name)
+            
+            # If still not found, try partial matching (e.g., "SQL Developer" in "Oracle SQL Developer")
+            if not detected_tool:
+                for det_key, det_tool in detected_dict.items():
+                    if normalized_tool_name in det_key or det_key in normalized_tool_name:
+                        detected_tool = det_tool
+                        break
+            
             print(f"\nChecking: {tool_name}")
-            print(f"  Looking for: '{tool_name.lower()}'")
+            print(f"  Normalized: '{normalized_tool_name}'")
             print(f"  Found: {detected_tool.name if detected_tool else 'NOT FOUND'}")
             
             if detected_tool:
@@ -387,21 +444,30 @@ class RestoreManager:
         # Common tool to winget ID mappings
         winget_ids = {
             'Visual Studio Code': 'Microsoft.VisualStudioCode',
+            'VS Code Insiders': 'Microsoft.VisualStudioCode.Insiders',
             'Python': 'Python.Python.3.12',
             'Node.js': 'OpenJS.NodeJS',
             'Git': 'Git.Git',
             'Docker Desktop': 'Docker.DockerDesktop',
+            'Docker': 'Docker.DockerDesktop',  # Backup config uses "Docker"
             'Postman': 'Postman.Postman',
             'IntelliJ IDEA': 'JetBrains.IntelliJIDEA.Community',
             'PyCharm': 'JetBrains.PyCharm.Community',
+            'WebStorm': 'JetBrains.WebStorm',
+            'Rider': 'JetBrains.Rider',
+            'DataGrip': 'JetBrains.DataGrip',
             'Android Studio': 'Google.AndroidStudio',
             'JetBrains Toolbox': 'JetBrains.Toolbox',
             'Notepad++': 'Notepad++.Notepad++',
+            'Sublime Text': 'SublimeHQ.SublimeText.4',
             'DBeaver': 'dbeaver.dbeaver',
             'Azure Data Studio': 'Microsoft.AzureDataStudio',
             'Oracle SQL Developer': 'Oracle.SQLDeveloper',
             'Oracle SQL Developer (Config Only)': 'Oracle.SQLDeveloper',  # Config-only detection
             'MobaXterm': 'Mobatek.MobaXterm',
+            'MongoDB Compass': 'MongoDB.Compass',
+            'Insomnia': 'Insomnia.Insomnia',
+            'Mockoon': 'mockoon.mockoon',
             # Browsers
             'Google Chrome': 'Google.Chrome',
             'Microsoft Edge': 'Microsoft.Edge',
@@ -449,12 +515,18 @@ class RestoreManager:
         # Tool to download URL mappings with version support
         if tool_name == 'Mockoon' and version:
             return f'https://github.com/mockoon/mockoon/releases/download/v{version}/mockoon.setup.{version}.exe'
+        elif tool_name == 'Mockoon':
+            return 'https://github.com/mockoon/mockoon/releases/latest'
         elif tool_name == 'Insomnia':
             return 'https://github.com/Kong/insomnia/releases/latest/download/Insomnia.Core.exe'
         elif tool_name == 'MobaXterm':
             # MobaXterm installer (direct download)
             return 'https://download.mobatek.net/2432023122823706/MobaXterm_Installer_v24.3.exe'
-        elif tool_name == 'Oracle SQL Developer':
+        elif tool_name == 'Sublime Text':
+            return 'https://www.sublimetext.com/download'
+        elif tool_name == 'MongoDB Compass':
+            return 'https://www.mongodb.com/try/download/compass'
+        elif tool_name == 'Oracle SQL Developer' or tool_name == 'Oracle SQL Developer (Config Only)':
             # SQL Developer is portable and requires Oracle account login
             # Provide instructions for manual download with the backed-up version
             if version:
@@ -1071,12 +1143,18 @@ class RestoreManager:
                             if parent_dir and not os.path.exists(parent_dir):
                                 os.makedirs(parent_dir, exist_ok=True)
                             
-                            # Remove existing destination if it exists
-                            if os.path.exists(restore_target):
-                                shutil.rmtree(restore_target, ignore_errors=True)
+                            # For browser profiles, merge instead of replace to preserve existing data
+                            is_browser_profile = any(browser in restore_target.lower() for browser in ['chrome', 'edge', 'firefox', 'brave', 'opera', 'vivaldi'])
                             
-                            # Copy directory from backup to original location
-                            shutil.copytree(backup_location, restore_target, dirs_exist_ok=True)
+                            if is_browser_profile and os.path.exists(restore_target):
+                                # Merge browser profile - copy files, overwrite only if newer or missing
+                                self._merge_directory(backup_location, restore_target)
+                            else:
+                                # Non-browser or new installation - full replace
+                                if os.path.exists(restore_target):
+                                    shutil.rmtree(restore_target, ignore_errors=True)
+                                shutil.copytree(backup_location, restore_target, dirs_exist_ok=True)
+                            
                             results['restored_items'].append(f"Directory: {os.path.basename(restore_target)}")
                         else:
                             results['skipped_items'].append(f"Backup folder not found: {backup_location}")
