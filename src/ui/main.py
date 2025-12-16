@@ -2584,8 +2584,8 @@ class MainWindow(QMainWindow):
                 self.restore_manager._cleanup_extracted_backup(extracted_path)
                 self.update_restore_detailed_log(f"[Cleanup] Temporary files cleaned up", "success")
             
-            # Final summary
-            self.restore_current = self.restore_total
+            # Final summary - set to total + 1 to reach 100%
+            self.restore_current = self.restore_total + 1
             self.update_restore_progress("\n" + "=" * 70, "info")
             self.update_restore_progress("RESTORATION COMPLETED - FINAL SUMMARY", "success")
             self.update_restore_progress("=" * 70, "info")

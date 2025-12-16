@@ -1088,6 +1088,10 @@ class RestoreManager:
                 if not backup_location_relative or not restore_target:
                     continue
                 
+                print(f"\n[Item] Type: {item_type}")
+                print(f"[Item] Backup location (relative): {backup_location_relative}")
+                print(f"[Item] Restore target: {restore_target}")
+                
                 # Resolve backup_location relative to the working_backup_path
                 # This handles cloud-synced backups where absolute paths differ between machines
                 if os.path.isabs(backup_location_relative):
@@ -1114,7 +1118,8 @@ class RestoreManager:
                     # Relative path (new format) - resolve relative to working_backup_path
                     backup_location = os.path.join(working_backup_path, backup_location_relative)
                 
-                print(f"Restoring: {backup_location_relative} -> {backup_location}")
+                print(f"[Resolved] Backup location: {backup_location}")
+                print(f"[Resolved] Location exists: {os.path.exists(backup_location)}")
                 
                 if item_type == 'file':
                     # Restore file
@@ -1125,12 +1130,17 @@ class RestoreManager:
                             if dest_dir and not os.path.exists(dest_dir):
                                 os.makedirs(dest_dir, exist_ok=True)
                             
+                            print(f"[COPY FILE] Source: {backup_location}")
+                            print(f"[COPY FILE] Destination: {restore_target}")
                             # Copy file from backup to original location
                             shutil.copy2(backup_location, restore_target)
+                            print(f"[COPY FILE] SUCCESS")
                             results['restored_items'].append(f"File: {os.path.basename(restore_target)}")
                         else:
+                            print(f"[FILE SKIP] Backup file not found: {backup_location}")
                             results['skipped_items'].append(f"Backup file not found: {backup_location}")
                     except Exception as e:
+                        print(f"[FILE ERROR] {str(e)}")
                         results['failed_items'].append(f"Failed to restore {os.path.basename(restore_target)}: {str(e)}")
                         results['success'] = False
                 
@@ -1138,6 +1148,8 @@ class RestoreManager:
                     # Restore directory
                     try:
                         if os.path.exists(backup_location):
+                            print(f"[COPY DIR] Source: {backup_location}")
+                            print(f"[COPY DIR] Destination: {restore_target}")
                             # Create parent directory if needed
                             parent_dir = os.path.dirname(restore_target)
                             if parent_dir and not os.path.exists(parent_dir):
@@ -1148,17 +1160,20 @@ class RestoreManager:
                             
                             if is_browser_profile and os.path.exists(restore_target):
                                 # Merge browser profile - copy files, overwrite only if newer or missing
+                                print(f"[COPY DIR] Merging browser profile")
                                 self._merge_directory(backup_location, restore_target)
                             else:
                                 # Non-browser or new installation - full replace
                                 if os.path.exists(restore_target):
                                     shutil.rmtree(restore_target, ignore_errors=True)
-                                shutil.copytree(backup_location, restore_target, dirs_exist_ok=True)
-                            
-                            results['restored_items'].append(f"Directory: {os.path.basename(restore_target)}")
+                                print(f"[COPY DIR] Full copy of directory")
+                                shutil.copytree(backup_location, restore_target)
+                            print(f"[COPY DIR] SUCCESS")
                         else:
-                            results['skipped_items'].append(f"Backup folder not found: {backup_location}")
+                            print(f"[DIR SKIP] Backup directory not found: {backup_location}")
+                            results['skipped_items'].append(f"Backup directory not found: {backup_location}")
                     except Exception as e:
+                        print(f"[DIR ERROR] {str(e)}")
                         results['failed_items'].append(f"Failed to restore {os.path.basename(restore_target)}: {str(e)}")
                         results['success'] = False
                 
@@ -1194,6 +1209,8 @@ class RestoreManager:
             # Special handling for SQL Developer version migration
             if 'sql developer' in tool_name.lower():
                 self._migrate_sqldeveloper_versions()
+                # Also explicitly restore connections if they exist in backup
+                self._restore_sqldeveloper_connections(working_backup_path, results)
             
             return results
             
@@ -1390,6 +1407,79 @@ class RestoreManager:
             results['skipped'].append("No packages.txt found")
         
         return results
+    
+    def _restore_sqldeveloper_connections(self, backup_path: str, results: Dict) -> None:
+        """
+        Explicitly restore SQL Developer connections from backup to all system versions
+        
+        This function finds connections.json in the backup and copies them to all
+        SQL Developer system folders, ensuring connections are available regardless of version.
+        """
+        try:
+            import shutil
+            from pathlib import Path
+            
+            sqldeveloper_backup = os.path.join(backup_path, 'SQL Developer')
+            if not os.path.exists(sqldeveloper_backup):
+                return
+            
+            sqldeveloper_path = os.path.expandvars(r'%APPDATA%\SQL Developer')
+            if not os.path.exists(sqldeveloper_path):
+                return
+            
+            # Find all connections.json files in backup
+            backup_connections = []
+            for root, dirs, files in os.walk(sqldeveloper_backup):
+                if 'connections.json' in files:
+                    backup_connections.append(os.path.join(root, 'connections.json'))
+            
+            if not backup_connections:
+                return
+            
+            # Find all system folders in the current installation
+            system_folders = []
+            for item in os.listdir(sqldeveloper_path):
+                if item.startswith('system') and os.path.isdir(os.path.join(sqldeveloper_path, item)):
+                    system_folders.append(item)
+            
+            if not system_folders:
+                return
+            
+            # For each backup connections.json, restore to all system versions
+            for backup_conn_path in backup_connections:
+                # Find the parent folder structure (e.g., o.jdeveloper.module.oracle.sqldev)
+                rel_path = os.path.relpath(backup_conn_path, sqldeveloper_backup)
+                
+                # Extract the folder name containing connections.json
+                parts = Path(rel_path).parts
+                
+                # Find system folder index (e.g., systemXX.X.X)
+                system_idx = None
+                for i, part in enumerate(parts):
+                    if part.startswith('system'):
+                        system_idx = i
+                        break
+                
+                if system_idx is not None:
+                    # Get the path structure after the system folder
+                    sub_path = os.path.join(*parts[system_idx+1:])
+                    
+                    # Copy to all current system versions
+                    for sys_folder in system_folders:
+                        dest_path = os.path.join(sqldeveloper_path, sys_folder, sub_path)
+                        dest_dir = os.path.dirname(dest_path)
+                        
+                        try:
+                            os.makedirs(dest_dir, exist_ok=True)
+                            shutil.copy2(backup_conn_path, dest_path)
+                            
+                            # Only add to results if not already mentioned
+                            if not any('connections' in item.lower() for item in results.get('restored_items', [])):
+                                results['restored_items'].append(f"Connections restored to {sys_folder}")
+                        except Exception as e:
+                            pass  # Silent fail, connections might already be there
+        except Exception:
+            pass  # Silent fail
     
     def _migrate_sqldeveloper_versions(self) -> bool:
         """
