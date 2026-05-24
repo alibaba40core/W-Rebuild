@@ -1,6 +1,6 @@
 # W-Rebuild - Windows Workspace Configuration Backup & Restore Tool
 
-**Complete Windows workspace configuration backup and restore solution** - Save your entire development environment (tools, settings, connections, extensions) and restore it on any Windows machine in minutes.
+**Complete Windows workspace configuration backup and restore solution** - Save your entire development environment (tools, settings, connections, extensions) using OneDrive and restore it on any Windows machine in minutes.
 
 ## 🚀 Features
 
